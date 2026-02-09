@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
-import OpenAI from 'openai'
 import { withAuth } from '@/lib/auth/middleware'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { apiSuccess, Errors } from '@/lib/api-response'
@@ -10,7 +9,8 @@ const AnalyzeSchema = z.object({
   propertyId: z.string().uuid(),
 })
 
-function getOpenAIClient() {
+async function getOpenAIClient() {
+  const { default: OpenAI } = await import('openai')
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 }
 
@@ -86,7 +86,8 @@ Provide a JSON analysis with these exact fields:
 
 Be conservative. Only respond with valid JSON, no markdown.`
 
-    const completion = await getOpenAIClient().chat.completions.create({
+    const openai = await getOpenAIClient()
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
