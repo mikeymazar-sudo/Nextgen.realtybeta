@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +14,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
-import { Phone, PhoneOff, Mic, MicOff, Delete, Loader2 } from 'lucide-react'
+import { Phone, PhoneOff, Mic, MicOff, Delete, Loader2, AlertCircle } from 'lucide-react'
 import { useAuth } from '@/providers/auth-provider'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api-client'
@@ -22,8 +22,7 @@ import { toast } from 'sonner'
 import { formatDistanceToNow } from 'date-fns'
 import type { Call } from '@/types/schema'
 import { useSearchParams } from 'next/navigation'
-
-type CallState = 'idle' | 'connecting' | 'ringing' | 'live' | 'ended'
+import { useTwilio } from '@/hooks/use-twilio'
 
 const dialPad = [
   ['1', '2', '3'],
@@ -34,18 +33,32 @@ const dialPad = [
 
 export default function DialerPage() {
   const [number, setNumber] = useState('')
-  const [callState, setCallState] = useState<CallState>('idle')
-  const [muted, setMuted] = useState(false)
-  const [duration, setDuration] = useState(0)
   const [calls, setCalls] = useState<Call[]>([])
   const [loadingCalls, setLoadingCalls] = useState(true)
   const [showNotesModal, setShowNotesModal] = useState(false)
   const [callNotes, setCallNotes] = useState('')
   const [currentCallId, setCurrentCallId] = useState<string | null>(null)
   const [savingNotes, setSavingNotes] = useState(false)
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
   const { user } = useAuth()
   const searchParams = useSearchParams()
+
+  const {
+    callState,
+    deviceReady,
+    makeCall: twilioMakeCall,
+    hangUp: twilioHangUp,
+    toggleMute,
+    isMuted,
+    duration,
+    error: twilioError,
+  } = useTwilio()
+
+  // Show Twilio errors
+  useEffect(() => {
+    if (twilioError) {
+      toast.error(twilioError)
+    }
+  }, [twilioError])
 
   // Pre-fill number from URL params
   useEffect(() => {
@@ -70,28 +83,18 @@ export default function DialerPage() {
     fetchCalls()
   }, [user])
 
-  const startTimer = useCallback(() => {
-    setDuration(0)
-    timerRef.current = setInterval(() => {
-      setDuration((d) => d + 1)
-    }, 1000)
-  }, [])
-
-  const stopTimer = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
+  // Open notes modal when call ends
+  useEffect(() => {
+    if (callState === 'ended' && currentCallId) {
+      setShowNotesModal(true)
     }
-  }, [])
+  }, [callState, currentCallId])
 
-  const makeCall = async () => {
+  const handleMakeCall = async () => {
     if (!number.trim()) return
 
-    setCallState('connecting')
-
     try {
-      // In a full implementation, this would use the Twilio Voice SDK
-      // For now, we'll create a call record and simulate
+      // Create a call record in the database
       const supabase = createClient()
       const { data: callRecord } = await supabase
         .from('calls')
@@ -99,7 +102,7 @@ export default function DialerPage() {
           caller_id: user?.id,
           to_number: number,
           status: 'initiated',
-          from_number: process.env.NEXT_PUBLIC_TWILIO_PHONE || '',
+          from_number: '',
         })
         .select()
         .single()
@@ -108,20 +111,23 @@ export default function DialerPage() {
         setCurrentCallId(callRecord.id)
       }
 
-      setCallState('ringing')
-      setTimeout(() => {
-        setCallState('live')
-        startTimer()
-      }, 2000)
+      // Make the actual Twilio call
+      const callSid = await twilioMakeCall(number)
+
+      // Update the record with the Twilio Call SID
+      if (callSid && callRecord) {
+        await supabase
+          .from('calls')
+          .update({ twilio_call_sid: callSid })
+          .eq('id', callRecord.id)
+      }
     } catch {
       toast.error('Failed to connect call')
-      setCallState('idle')
     }
   }
 
-  const hangUp = async () => {
-    stopTimer()
-    setCallState('ended')
+  const handleHangUp = async () => {
+    twilioHangUp()
 
     // Update call record
     if (currentCallId) {
@@ -135,8 +141,6 @@ export default function DialerPage() {
         })
         .eq('id', currentCallId)
     }
-
-    setShowNotesModal(true)
   }
 
   const saveCallNotes = async () => {
@@ -173,11 +177,8 @@ export default function DialerPage() {
   }
 
   const resetCall = () => {
-    setCallState('idle')
-    setDuration(0)
     setCallNotes('')
     setCurrentCallId(null)
-    setMuted(false)
   }
 
   const formatDuration = (s: number) => {
@@ -196,7 +197,26 @@ export default function DialerPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Dialer</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Dialer</h1>
+        <div className="flex items-center gap-2">
+          <div
+            className={`h-2 w-2 rounded-full ${
+              deviceReady ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'
+            }`}
+          />
+          <span className="text-xs text-muted-foreground">
+            {deviceReady ? 'Ready' : 'Connecting...'}
+          </span>
+        </div>
+      </div>
+
+      {twilioError && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          <span>{twilioError}</span>
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Dialer */}
@@ -256,8 +276,8 @@ export default function DialerPage() {
                   <Button
                     size="icon"
                     className="h-16 w-16 rounded-full bg-green-600 hover:bg-green-700"
-                    onClick={makeCall}
-                    disabled={!number.trim()}
+                    onClick={handleMakeCall}
+                    disabled={!number.trim() || !deviceReady}
                   >
                     <Phone className="h-6 w-6" />
                   </Button>
@@ -266,7 +286,7 @@ export default function DialerPage() {
                 <Button
                   size="icon"
                   className="h-16 w-16 rounded-full bg-red-600 hover:bg-red-700"
-                  onClick={hangUp}
+                  onClick={handleHangUp}
                 >
                   <Loader2 className="h-6 w-6 animate-spin" />
                 </Button>
@@ -275,15 +295,15 @@ export default function DialerPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    className={`h-12 w-12 rounded-full ${muted ? 'bg-red-50 border-red-200' : ''}`}
-                    onClick={() => setMuted(!muted)}
+                    className={`h-12 w-12 rounded-full ${isMuted ? 'bg-red-50 border-red-200' : ''}`}
+                    onClick={toggleMute}
                   >
-                    {muted ? <MicOff className="h-5 w-5 text-red-500" /> : <Mic className="h-5 w-5" />}
+                    {isMuted ? <MicOff className="h-5 w-5 text-red-500" /> : <Mic className="h-5 w-5" />}
                   </Button>
                   <Button
                     size="icon"
                     className="h-16 w-16 rounded-full bg-red-600 hover:bg-red-700"
-                    onClick={hangUp}
+                    onClick={handleHangUp}
                   >
                     <PhoneOff className="h-6 w-6" />
                   </Button>

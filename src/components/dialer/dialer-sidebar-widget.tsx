@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,8 +18,7 @@ import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api-client'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-
-type CallState = 'idle' | 'connecting' | 'ringing' | 'live' | 'ended'
+import { useTwilio } from '@/hooks/use-twilio'
 
 const dialPad = [
     ['1', '2', '3'],
@@ -30,20 +29,34 @@ const dialPad = [
 
 export function DialerSidebarWidget() {
     const [number, setNumber] = useState('')
-    const [callState, setCallState] = useState<CallState>('idle')
-    const [muted, setMuted] = useState(false)
-    const [duration, setDuration] = useState(0)
     const [showNotesModal, setShowNotesModal] = useState(false)
     const [callNotes, setCallNotes] = useState('')
     const [currentCallId, setCurrentCallId] = useState<string | null>(null)
     const [savingNotes, setSavingNotes] = useState(false)
     const [isExpanded, setIsExpanded] = useState(true)
-    const timerRef = useRef<NodeJS.Timeout | null>(null)
     const { user } = useAuth()
 
     const searchParams = useSearchParams()
     const router = useRouter()
     const pathname = usePathname()
+
+    const {
+        callState,
+        deviceReady,
+        makeCall: twilioMakeCall,
+        hangUp: twilioHangUp,
+        toggleMute,
+        isMuted,
+        duration,
+        error: twilioError,
+    } = useTwilio()
+
+    // Show Twilio errors
+    useEffect(() => {
+        if (twilioError) {
+            toast.error(twilioError)
+        }
+    }, [twilioError])
 
     // Check for number to dial from URL
     useEffect(() => {
@@ -51,46 +64,23 @@ export function DialerSidebarWidget() {
         if (dialNumber) {
             setNumber(dialNumber)
             setIsExpanded(true)
-            // Optional: clean up URL
-            // const params = new URLSearchParams(searchParams)
-            // params.delete('dial_number')
-            // router.replace(`${pathname}?${params.toString()}`, { scroll: false })
         }
     }, [searchParams, pathname, router])
 
-    // Clean up timer on unmount
+    // Open notes modal when call ends
     useEffect(() => {
-        return () => {
-            if (timerRef.current) {
-                clearInterval(timerRef.current)
-            }
+        if (callState === 'ended' && currentCallId) {
+            setShowNotesModal(true)
         }
-    }, [])
-
-    const startTimer = useCallback(() => {
-        setDuration(0)
-        if (timerRef.current) clearInterval(timerRef.current)
-        timerRef.current = setInterval(() => {
-            setDuration((d) => d + 1)
-        }, 1000)
-    }, [])
-
-    const stopTimer = useCallback(() => {
-        if (timerRef.current) {
-            clearInterval(timerRef.current)
-            timerRef.current = null
-        }
-    }, [])
+    }, [callState, currentCallId])
 
     const makeCall = async () => {
         if (!number.trim()) return
 
-        setCallState('connecting')
-        setIsExpanded(true) // Ensure widget is expanded when call starts
+        setIsExpanded(true)
 
         try {
-            // In a full implementation, this would use the Twilio Voice SDK
-            // For now, we'll create a call record and simulate
+            // Create a call record in the database
             const supabase = createClient()
             const { data: callRecord } = await supabase
                 .from('calls')
@@ -98,7 +88,7 @@ export function DialerSidebarWidget() {
                     caller_id: user?.id,
                     to_number: number,
                     status: 'initiated',
-                    from_number: process.env.NEXT_PUBLIC_TWILIO_PHONE || '',
+                    from_number: '',
                 })
                 .select()
                 .single()
@@ -107,20 +97,23 @@ export function DialerSidebarWidget() {
                 setCurrentCallId(callRecord.id)
             }
 
-            setCallState('ringing')
-            setTimeout(() => {
-                setCallState('live')
-                startTimer()
-            }, 2000)
+            // Make the actual Twilio call
+            const callSid = await twilioMakeCall(number)
+
+            // Update the record with the Twilio Call SID
+            if (callSid && callRecord) {
+                await supabase
+                    .from('calls')
+                    .update({ twilio_call_sid: callSid })
+                    .eq('id', callRecord.id)
+            }
         } catch {
             toast.error('Failed to connect call')
-            setCallState('idle')
         }
     }
 
     const hangUp = async () => {
-        stopTimer()
-        setCallState('ended')
+        twilioHangUp()
 
         // Update call record
         if (currentCallId) {
@@ -134,8 +127,6 @@ export function DialerSidebarWidget() {
                 })
                 .eq('id', currentCallId)
         }
-
-        setShowNotesModal(true)
     }
 
     const saveCallNotes = async () => {
@@ -160,11 +151,8 @@ export function DialerSidebarWidget() {
     }
 
     const resetCall = () => {
-        setCallState('idle')
-        setDuration(0)
         setCallNotes('')
         setCurrentCallId(null)
-        setMuted(false)
     }
 
     const formatDuration = (s: number) => {
@@ -194,7 +182,8 @@ export function DialerSidebarWidget() {
                         callState === 'live' ? "bg-green-500 animate-pulse" :
                             callState === 'ringing' ? "bg-blue-500 animate-pulse" :
                                 callState === 'connecting' ? "bg-yellow-500" :
-                                    "bg-zinc-300 dark:bg-zinc-600"
+                                    deviceReady ? "bg-green-500" :
+                                        "bg-zinc-300 dark:bg-zinc-600"
                     )} />
                     <span className="text-sm font-medium">Dialer</span>
                     {callState !== 'idle' && (
@@ -258,7 +247,7 @@ export function DialerSidebarWidget() {
                                     size="icon"
                                     className="h-12 w-12 rounded-full bg-green-600 hover:bg-green-700 shadow-sm"
                                     onClick={makeCall}
-                                    disabled={!number.trim()}
+                                    disabled={!number.trim() || !deviceReady}
                                 >
                                     <Phone className="h-5 w-5" />
                                 </Button>
@@ -278,11 +267,11 @@ export function DialerSidebarWidget() {
                                     size="icon"
                                     className={cn(
                                         "h-10 w-10 rounded-full",
-                                        muted && "bg-red-50 border-red-200 text-red-600 dark:bg-red-950/30 dark:border-red-900/50 dark:text-red-400"
+                                        isMuted && "bg-red-50 border-red-200 text-red-600 dark:bg-red-950/30 dark:border-red-900/50 dark:text-red-400"
                                     )}
-                                    onClick={() => setMuted(!muted)}
+                                    onClick={toggleMute}
                                 >
-                                    {muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                                    {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                                 </Button>
                                 <Button
                                     size="icon"
@@ -297,7 +286,7 @@ export function DialerSidebarWidget() {
                 </div>
             )}
 
-            {/* Call Notes Modal - Reused from page */}
+            {/* Call Notes Modal */}
             <Dialog open={showNotesModal} onOpenChange={(open) => {
                 if (!open && !savingNotes) {
                     setShowNotesModal(false);
