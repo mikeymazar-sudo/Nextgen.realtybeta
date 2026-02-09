@@ -51,6 +51,8 @@ export default function DialerPage() {
     isMuted,
     duration,
     error: twilioError,
+    retry: retryTwilio,
+    initializing: twilioInitializing,
   } = useTwilio()
 
   // Show Twilio errors
@@ -202,19 +204,24 @@ export default function DialerPage() {
         <div className="flex items-center gap-2">
           <div
             className={`h-2 w-2 rounded-full ${
-              deviceReady ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'
+              deviceReady ? 'bg-green-500' : twilioError ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'
             }`}
           />
           <span className="text-xs text-muted-foreground">
-            {deviceReady ? 'Ready' : 'Connecting...'}
+            {deviceReady ? 'Ready' : twilioError ? 'Disconnected' : 'Connecting...'}
           </span>
         </div>
       </div>
 
       {twilioError && (
-        <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
-          <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          <span>{twilioError}</span>
+        <div className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 rounded-lg text-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <span>{twilioError}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={retryTwilio} disabled={twilioInitializing}>
+            {twilioInitializing ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Retry'}
+          </Button>
         </div>
       )}
 
