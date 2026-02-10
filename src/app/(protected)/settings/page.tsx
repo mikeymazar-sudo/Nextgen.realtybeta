@@ -9,12 +9,15 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Loader2, User, Users, BarChart3 } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { useTheme } from 'next-themes'
+import { Loader2, User, Users, BarChart3, Moon, Sun } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 
 export default function SettingsPage() {
   const { profile, refreshProfile } = useAuth()
+  const { setTheme, theme } = useTheme()
   const [fullName, setFullName] = useState(profile?.full_name || '')
   const [saving, setSaving] = useState(false)
 
@@ -64,6 +67,10 @@ export default function SettingsPage() {
           <TabsTrigger value="usage" className="gap-2">
             <BarChart3 className="h-4 w-4" />
             API Usage
+          </TabsTrigger>
+          <TabsTrigger value="appearance" className="gap-2">
+            <Moon className="h-4 w-4" />
+            Appearance
           </TabsTrigger>
         </TabsList>
 
@@ -177,6 +184,32 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="appearance">
+          <Card className="shadow-sm">
+            <CardHeader>
+              <CardTitle>Appearance</CardTitle>
+              <CardDescription>Customize the look and feel of the application.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-base">Dark Mode</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Enable dark mode for a better viewing experience at night.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Sun className="h-4 w-4 text-muted-foreground" />
+                  <Switch
+                    checked={theme === 'dark'}
+                    onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+                  />
+                  <Moon className="h-4 w-4 text-muted-foreground" />
+                </div>
               </div>
             </CardContent>
           </Card>
