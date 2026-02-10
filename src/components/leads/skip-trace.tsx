@@ -44,6 +44,9 @@ import {
   Trash2,
 } from 'lucide-react'
 import { api } from '@/lib/api-client'
+import { createClient } from '@/lib/supabase/client'
+import { EmailComposer } from './email-composer'
+import { format } from 'date-fns'
 import { toast } from 'sonner'
 import type { Contact, PhoneEntry, EmailEntry } from '@/types/schema'
 
@@ -66,28 +69,88 @@ interface SkipTraceProps {
 }
 
 // Helper to normalize phone/email entries (handles both old string[] and new object[] formats)
+// Helper to normalize phone/email entries (handles both old string[] and new object[] formats)
 function normalizePhoneEntries(phones: PhoneEntry[] | string[]): PhoneEntry[] {
   if (!phones || phones.length === 0) return []
-  if (typeof phones[0] === 'string') {
-    return (phones as string[]).map((value, i) => ({
-      value,
-      label: 'mobile' as const,
-      is_primary: i === 0,
-    }))
-  }
-  return phones as PhoneEntry[]
+  return phones.map((p, i) => {
+    let entry: PhoneEntry
+
+    if (typeof p === 'string') {
+      // Check if it's a JSON string (starts with {)
+      if (p.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(p)
+          if (parsed && typeof parsed === 'object' && 'value' in parsed) {
+            entry = parsed as PhoneEntry
+          } else {
+            entry = { value: p, label: 'mobile', is_primary: i === 0 }
+          }
+        } catch (e) {
+          entry = { value: p, label: 'mobile', is_primary: i === 0 }
+        }
+      } else {
+        entry = { value: p, label: 'mobile', is_primary: i === 0 }
+      }
+    } else {
+      entry = p
+    }
+
+    // Double-check: if the value itself is a JSON object string, parse it too
+    // This handles cases where DB stored '{"value":"..."}' inside the value field
+    if (entry.value && typeof entry.value === 'string' && entry.value.trim().startsWith('{')) {
+      try {
+        const innerParsed = JSON.parse(entry.value)
+        if (innerParsed && typeof innerParsed === 'object' && 'value' in innerParsed) {
+          return innerParsed as PhoneEntry
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    return entry
+  })
 }
 
 function normalizeEmailEntries(emails: EmailEntry[] | string[]): EmailEntry[] {
   if (!emails || emails.length === 0) return []
-  if (typeof emails[0] === 'string') {
-    return (emails as string[]).map((value, i) => ({
-      value,
-      label: 'personal' as const,
-      is_primary: i === 0,
-    }))
-  }
-  return emails as EmailEntry[]
+  return emails.map((e, i) => {
+    let entry: EmailEntry
+
+    if (typeof e === 'string') {
+      // Check if it's a JSON string (starts with {)
+      if (e.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(e)
+          if (parsed && typeof parsed === 'object' && 'value' in parsed) {
+            entry = parsed as EmailEntry
+          } else {
+            entry = { value: e, label: 'personal', is_primary: i === 0 }
+          }
+        } catch (error) {
+          entry = { value: e, label: 'personal', is_primary: i === 0 }
+        }
+      } else {
+        entry = { value: e, label: 'personal', is_primary: i === 0 }
+      }
+    } else {
+      entry = e
+    }
+
+    // Double-check nested JSON string
+    if (entry.value && typeof entry.value === 'string' && entry.value.trim().startsWith('{')) {
+      try {
+        const innerParsed = JSON.parse(entry.value)
+        if (innerParsed && typeof innerParsed === 'object' && 'value' in innerParsed) {
+          return innerParsed as EmailEntry
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    return entry
+  })
 }
 
 export function SkipTrace({ propertyId, ownerName, address, city, state, zip, existingContacts, status, sqft, yearBuilt, bedrooms, bathrooms, lotSize, propertyType, listPrice }: SkipTraceProps) {
@@ -101,8 +164,13 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
   const searchParams = useSearchParams()
 
   const handleCall = (phone: string) => {
-    const params = new URLSearchParams(searchParams.toString())
+    // Create fresh params to avoid cluttering URL with existing filters/view/etc
+    // We only need dial_number and auto_call for the dialer to work
+    const params = new URLSearchParams()
     params.set('dial_number', phone)
+    params.set('auto_call', 'true')
+
+    // User requested ONLY phone number to be passed, so we don't set contact info here
     router.push(`${pathname}?${params.toString()}`)
   }
 
@@ -113,6 +181,10 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
   const [addLabel, setAddLabel] = useState<string>('mobile')
   const [editIndex, setEditIndex] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+
+  // Email Composer state
+  const [emailComposerOpen, setEmailComposerOpen] = useState(false)
+  const [lastEmailed, setLastEmailed] = useState<string | null>(null)
 
   const contactId = contacts[0]?.id
 
@@ -128,7 +200,7 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
   const primaryPhone = allPhones.find(p => p.is_primary) || allPhones[0]
   const primaryEmail = allEmails.find(e => e.is_primary) || allEmails[0]
 
-  // Set initial selections
+  // Set initial selections and fetch email history
   useEffect(() => {
     if (allPhones.length > 0 && !selectedPhone) {
       setSelectedPhone(primaryPhone?.value || allPhones[0].value)
@@ -137,6 +209,34 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
       setSelectedEmail(primaryEmail?.value || allEmails[0].value)
     }
   }, [allPhones, allEmails, selectedPhone, selectedEmail, primaryPhone, primaryEmail])
+
+  // Fetch last email date when selected email changes
+  useEffect(() => {
+    async function fetchLastEmail() {
+      if (!selectedEmail) {
+        setLastEmailed(null)
+        return
+      }
+
+      const supabase = createClient()
+      const { data } = await supabase
+        .from('communication_logs')
+        .select('created_at')
+        .eq('recipient', selectedEmail)
+        .eq('type', 'email')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (data) {
+        setLastEmailed(data.created_at)
+      } else {
+        setLastEmailed(null)
+      }
+    }
+
+    fetchLastEmail()
+  }, [selectedEmail])
 
   const runSkipTrace = async (force?: boolean) => {
     setLoading(true)
@@ -430,6 +530,24 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <EmailComposer
+          isOpen={emailComposerOpen}
+          onClose={() => setEmailComposerOpen(false)}
+          initialTo={selectedEmail}
+          property={{
+            id: propertyId,
+            address,
+            city,
+            state,
+            zip,
+            price: listPrice || null,
+            bedrooms: bedrooms || null,
+            bathrooms: bathrooms || null,
+            sqft: sqft || null,
+            ownerName: contacts[0]?.name || ownerName,
+          }}
+        />
       </Card>
     )
   }
@@ -635,9 +753,9 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
           <div className="flex gap-2">
             <Select value={selectedEmail} onValueChange={setSelectedEmail}>
               <SelectTrigger className="flex-1">
-                <SelectValue placeholder="Select email">
-                  {selectedEmail}
-                </SelectValue>
+                <span className="truncate">
+                  {selectedEmail || "Select email"}
+                </span>
               </SelectTrigger>
               <SelectContent>
                 {allEmails.map((email, i) => (
@@ -701,15 +819,20 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
           </div>
           {/* Email Button */}
           {selectedEmail && (
-            <Button
-              asChild
-              className="w-full bg-blue-600 hover:bg-blue-700"
-            >
-              <a href={`mailto:${selectedEmail}`}>
+            <div className="space-y-1">
+              <Button
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                onClick={() => setEmailComposerOpen(true)}
+              >
                 <Mail className="mr-2 h-4 w-4" />
                 Email {selectedEmail}
-              </a>
-            </Button>
+              </Button>
+              {lastEmailed && (
+                <p className="text-[10px] text-center text-muted-foreground">
+                  Last emailed: {format(new Date(lastEmailed), 'MMM d, yyyy')}
+                </p>
+              )}
+            </div>
           )}
         </div>
 
