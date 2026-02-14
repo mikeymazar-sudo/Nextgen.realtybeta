@@ -31,6 +31,9 @@ export async function POST(req: NextRequest) {
     const to = params.To
     const duration = params.CallDuration ? parseInt(params.CallDuration) : null
     const callerId = params.Caller?.startsWith('client:') ? params.Caller.replace('client:', '') : null
+    const recordingSid = params.RecordingSid
+    const recordingUrl = params.RecordingUrl
+    const recordingStatus = params.RecordingStatus
 
     const supabase = createAdminClient()
 
@@ -50,6 +53,8 @@ export async function POST(req: NextRequest) {
             status: callStatus,
             duration,
             ended_at: callStatus === 'completed' ? new Date().toISOString() : undefined,
+            recording_sid: recordingSid,
+            recording_url: recordingUrl,
           })
           .eq('twilio_call_sid', callSid)
       } else if (callerId) {

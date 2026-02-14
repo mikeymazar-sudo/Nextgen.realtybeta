@@ -12,13 +12,18 @@ import {
     DialogFooter,
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
-import { Phone, PhoneOff, Mic, MicOff, Delete, Loader2, ChevronDown, ChevronUp, User } from 'lucide-react'
+import { Phone, PhoneOff, Mic, MicOff, Delete, Loader2, ChevronDown, ChevronUp, User, Zap } from 'lucide-react'
 import { useAuth } from '@/providers/auth-provider'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api-client'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useTwilio } from '@/hooks/use-twilio'
+import { usePowerDialer } from '@/hooks/use-power-dialer'
+import { PowerDialerSetupDialog } from './power-dialer-setup-dialog'
+import { PowerDialerControls } from './power-dialer-controls'
+import { PowerDialerSkipTraceDialog } from './power-dialer-skip-trace-dialog'
+import { SMSTemplateEditorDialog } from './sms-template-editor-dialog'
 
 const dialPad = [
     ['1', '2', '3'],
@@ -26,6 +31,9 @@ const dialPad = [
     ['7', '8', '9'],
     ['*', '0', '#'],
 ]
+
+// Quick note tags used in both manual and power dialer disposition
+const QUICK_TAGS = ['No Answer', 'Left Voicemail', 'Interested', 'Not Interested', 'Wrong Number']
 
 export function DialerSidebarWidget() {
     const [number, setNumber] = useState('')
@@ -37,6 +45,9 @@ export function DialerSidebarWidget() {
     const [contactName, setContactName] = useState<string | null>(null)
     const [propertyAddress, setPropertyAddress] = useState<string | null>(null)
     const [pendingAutoCall, setPendingAutoCall] = useState(false)
+    const [propertyId, setPropertyId] = useState<string | null>(null)
+    // Track which tag was last clicked for power dialer disposition
+    const [lastTag, setLastTag] = useState<string | null>(null)
     const autoCallProcessedRef = useRef<string | null>(null)
     const { user } = useAuth()
 
@@ -57,6 +68,17 @@ export function DialerSidebarWidget() {
         initializing,
     } = useTwilio()
 
+    // ─── Power Dialer ────────────────────────────────────────────
+    const powerDialer = usePowerDialer({
+        callState,
+        duration,
+        deviceReady,
+        makeCall: twilioMakeCall,
+        userId: user?.id,
+    })
+
+    const isPowerDialerActive = powerDialer.mode !== 'IDLE'
+
     // Show Twilio errors
     useEffect(() => {
         if (twilioError) {
@@ -66,55 +88,16 @@ export function DialerSidebarWidget() {
 
     // Clear URL params helper
     const clearDialParams = useCallback(() => {
-        const params = new URLSearchParams(searchParams.toString())
-        params.delete('dial_number')
-        params.delete('auto_call')
-        params.delete('contact_name')
-        params.delete('property_address')
-        const newUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname
-        router.replace(newUrl, { scroll: false })
-    }, [searchParams, pathname, router])
+        const url = new URL(window.location.href)
+        url.searchParams.delete('dial_number')
+        url.searchParams.delete('auto_call')
+        url.searchParams.delete('contact_name')
+        url.searchParams.delete('property_address')
+        url.searchParams.delete('property_id')
+        window.history.replaceState({}, '', url.toString())
+    }, [])
 
-    // Check for number to dial from URL + auto_call support
-    useEffect(() => {
-        const dialNumber = searchParams.get('dial_number')
-        const autoCall = searchParams.get('auto_call')
-        const contactNameParam = searchParams.get('contact_name')
-        const propertyAddressParam = searchParams.get('property_address')
-
-        if (dialNumber) {
-            // Prevent processing the same auto-call twice
-            const callKey = `${dialNumber}-${autoCall}`
-            if (autoCallProcessedRef.current === callKey) return
-
-            setNumber(dialNumber)
-            setIsExpanded(true)
-
-            if (contactNameParam) setContactName(decodeURIComponent(contactNameParam))
-            if (propertyAddressParam) setPropertyAddress(decodeURIComponent(propertyAddressParam))
-
-            if (autoCall === 'true') {
-                autoCallProcessedRef.current = callKey
-                if (deviceReady && callState === 'idle') {
-                    // Device is ready, call immediately
-                    initiateAutoCall(dialNumber)
-                } else {
-                    // Device not ready yet, set pending flag
-                    setPendingAutoCall(true)
-                }
-            }
-        }
-    }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Handle pending auto-call when device becomes ready
-    useEffect(() => {
-        if (pendingAutoCall && deviceReady && callState === 'idle' && number) {
-            setPendingAutoCall(false)
-            initiateAutoCall(number)
-        }
-    }, [pendingAutoCall, deviceReady, callState, number]) // eslint-disable-line react-hooks/exhaustive-deps
-
-    const initiateAutoCall = async (phoneNumber: string) => {
+    const initiateAutoCall = async (phoneNumber: string, associatedPropertyId?: string | null) => {
         // Clear URL params immediately to prevent re-triggers
         clearDialParams()
 
@@ -130,6 +113,7 @@ export function DialerSidebarWidget() {
                     to_number: phoneNumber,
                     status: 'initiated',
                     from_number: '',
+                    property_id: associatedPropertyId || propertyId,
                 })
                 .select()
                 .single()
@@ -151,12 +135,81 @@ export function DialerSidebarWidget() {
         }
     }
 
-    // Open notes modal when call ends
+    // Check for number to dial from URL + auto_call support
     useEffect(() => {
-        if (callState === 'ended' && currentCallId) {
+        // Don't process URL params when power dialer is active
+        if (isPowerDialerActive) return
+
+        const dialNumber = searchParams.get('dial_number')
+        const autoCall = searchParams.get('auto_call')
+        const contactNameParam = searchParams.get('contact_name')
+        const propertyAddressParam = searchParams.get('property_address')
+        const propertyIdParam = searchParams.get('property_id')
+
+        // Try to extract property ID from pathname if not in params
+        let derivedPropertyId = propertyIdParam
+        if (!derivedPropertyId) {
+            const match = pathname?.match(/\/leads\/([0-9a-fA-F-]{36})/)
+            if (match) {
+                derivedPropertyId = match[1]
+            }
+        }
+
+        if (derivedPropertyId) {
+            setPropertyId(derivedPropertyId)
+        }
+
+        if (dialNumber) {
+            const callKey = `${dialNumber}-${autoCall}`
+            if (autoCallProcessedRef.current === callKey) return
+
+            setNumber(dialNumber)
+            setIsExpanded(true)
+
+            if (contactNameParam) setContactName(decodeURIComponent(contactNameParam))
+            if (propertyAddressParam) setPropertyAddress(decodeURIComponent(propertyAddressParam))
+
+            if (autoCall === 'true') {
+                autoCallProcessedRef.current = callKey
+                if (deviceReady && callState === 'idle') {
+                    initiateAutoCall(dialNumber, derivedPropertyId)
+                } else {
+                    setPendingAutoCall(true)
+                }
+            }
+        }
+    }, [searchParams, pathname, deviceReady, callState, twilioHangUp, clearDialParams, isPowerDialerActive])
+
+    // Handle pending auto-call when device becomes ready
+    useEffect(() => {
+        if (pendingAutoCall && deviceReady && callState === 'idle' && number) {
+            setPendingAutoCall(false)
+            initiateAutoCall(number, propertyId)
+        }
+    }, [pendingAutoCall, deviceReady, callState, number, propertyId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Open notes modal when call ends (manual mode only)
+    useEffect(() => {
+        if (callState === 'ended' && currentCallId && !isPowerDialerActive) {
             setShowNotesModal(true)
         }
-    }, [callState, currentCallId])
+    }, [callState, currentCallId, isPowerDialerActive])
+
+    // Open notes modal when power dialer enters DISPOSITION mode
+    useEffect(() => {
+        if (isPowerDialerActive && powerDialer.mode === 'DISPOSITION') {
+            setCallNotes('')
+            setLastTag(null)
+            setShowNotesModal(true)
+        }
+    }, [isPowerDialerActive, powerDialer.mode])
+
+    // Keep dialer expanded when power dialer is active
+    useEffect(() => {
+        if (isPowerDialerActive) {
+            setIsExpanded(true)
+        }
+    }, [isPowerDialerActive])
 
     const makeCall = async () => {
         if (!number.trim()) return
@@ -164,7 +217,6 @@ export function DialerSidebarWidget() {
         setIsExpanded(true)
 
         try {
-            // Create a call record in the database
             const supabase = createClient()
             const { data: callRecord } = await supabase
                 .from('calls')
@@ -173,6 +225,7 @@ export function DialerSidebarWidget() {
                     to_number: number,
                     status: 'initiated',
                     from_number: '',
+                    property_id: propertyId,
                 })
                 .select()
                 .single()
@@ -181,10 +234,8 @@ export function DialerSidebarWidget() {
                 setCurrentCallId(callRecord.id)
             }
 
-            // Make the actual Twilio call
             const callSid = await twilioMakeCall(number)
 
-            // Update the record with the Twilio Call SID
             if (callSid && callRecord) {
                 await supabase
                     .from('calls')
@@ -197,9 +248,9 @@ export function DialerSidebarWidget() {
     }
 
     const hangUp = async () => {
+        setPendingAutoCall(false)
         twilioHangUp()
 
-        // Update call record
         if (currentCallId) {
             const supabase = createClient()
             await supabase
@@ -210,10 +261,34 @@ export function DialerSidebarWidget() {
                     ended_at: new Date().toISOString(),
                 })
                 .eq('id', currentCallId)
+        } else {
+            resetCall()
         }
     }
 
     const saveCallNotes = async () => {
+        if (isPowerDialerActive) {
+            // Power dialer mode: save notes then advance
+            if (currentCallId) {
+                setSavingNotes(true)
+                const result = await api.updateCallNotes(currentCallId, callNotes)
+                setSavingNotes(false)
+                if (result.error) {
+                    toast.error('Failed to save notes')
+                } else {
+                    toast.success('Call notes saved')
+                }
+            }
+            setShowNotesModal(false)
+            setCallNotes('')
+            setCurrentCallId(null)
+            // Advance power dialer to next lead with disposition
+            powerDialer.advanceToNext(lastTag || undefined)
+            setLastTag(null)
+            return
+        }
+
+        // Normal mode
         if (!currentCallId) {
             setShowNotesModal(false)
             resetCall()
@@ -234,13 +309,27 @@ export function DialerSidebarWidget() {
         resetCall()
     }
 
+    const skipNotesModal = () => {
+        setShowNotesModal(false)
+        if (isPowerDialerActive) {
+            setCallNotes('')
+            setCurrentCallId(null)
+            powerDialer.advanceToNext(lastTag || undefined)
+            setLastTag(null)
+        } else {
+            resetCall()
+        }
+    }
+
     const resetCall = () => {
-        setNumber('') // Clear number on reset
-        setIsExpanded(false) // Collapse dialer
+        setNumber('')
+        setIsExpanded(false)
         setCallNotes('')
         setCurrentCallId(null)
         setContactName(null)
         setPropertyAddress(null)
+        setPropertyId(null)
+        setLastTag(null)
         autoCallProcessedRef.current = null
     }
 
@@ -263,7 +352,7 @@ export function DialerSidebarWidget() {
             {/* Header / Toggle */}
             <div
                 className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-                onClick={() => setIsExpanded(!isExpanded)}
+                onClick={() => !isPowerDialerActive && setIsExpanded(!isExpanded)}
             >
                 <div className="flex items-center gap-2">
                     <div className={cn(
@@ -271,168 +360,216 @@ export function DialerSidebarWidget() {
                         callState === 'live' ? "bg-green-500 animate-pulse" :
                             callState === 'ringing' ? "bg-blue-500 animate-pulse" :
                                 callState === 'connecting' ? "bg-yellow-500" :
-                                    deviceReady ? "bg-green-500" :
-                                        "bg-zinc-300 dark:bg-zinc-600"
+                                    isPowerDialerActive ? "bg-amber-500 animate-pulse" :
+                                        deviceReady ? "bg-green-500" :
+                                            "bg-zinc-300 dark:bg-zinc-600"
                     )} />
-                    <span className="text-sm font-medium">Dialer</span>
-                    {callState !== 'idle' && (
+                    <span className="text-sm font-medium">
+                        {isPowerDialerActive ? 'Power Dialer' : 'Dialer'}
+                    </span>
+                    {callState !== 'idle' && !isPowerDialerActive && (
                         <span className="text-xs text-muted-foreground ml-1">
                             {callState === 'live' ? formatDuration(duration) : callState}
                         </span>
                     )}
                 </div>
-                {isExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                )}
+                <div className="flex items-center gap-1">
+                    {/* Power Dialer button (only shown when idle and no active call) */}
+                    {!isPowerDialerActive && callState === 'idle' && !pendingAutoCall && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                powerDialer.openSetup()
+                            }}
+                            title="Power Dialer"
+                        >
+                            <Zap className="h-3.5 w-3.5" />
+                        </Button>
+                    )}
+                    {!isPowerDialerActive && (
+                        isExpanded ? (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        )
+                    )}
+                </div>
             </div>
 
             {/* Expanded Content */}
             {isExpanded && (
-                <div className="px-4 pb-4 animate-in slide-in-from-top-2 duration-200">
-                    {/* Contact Info (shown when calling from property) */}
-                    {(contactName || propertyAddress) && callState !== 'idle' && (
-                        <div className="mb-3 p-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
-                            <div className="flex items-center gap-2">
-                                <User className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                                <div className="min-w-0">
-                                    {contactName && (
-                                        <p className="text-xs font-medium text-blue-700 dark:text-blue-300 truncate">
-                                            {contactName}
-                                        </p>
-                                    )}
-                                    {propertyAddress && (
-                                        <p className="text-xs text-blue-600/70 dark:text-blue-400/70 truncate">
-                                            {propertyAddress}
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Number Display */}
-                    <div className="mb-4">
-                        <Input
-                            value={number}
-                            onChange={(e) => setNumber(e.target.value)}
-                            placeholder="Enter number..."
-                            className="text-center text-lg font-mono h-10 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950"
-                            disabled={callState !== 'idle'}
+                <>
+                    {/* ─── Power Dialer Mode ──────────────────── */}
+                    {isPowerDialerActive ? (
+                        <PowerDialerControls
+                            mode={powerDialer.mode}
+                            currentLead={powerDialer.currentLead}
+                            currentIndex={powerDialer.currentIndex}
+                            totalLeads={powerDialer.queue.length}
+                            currentPhone={powerDialer.currentPhone}
+                            dialAttempt={powerDialer.dialAttempt}
+                            smsStatus={powerDialer.smsStatus}
+                            stats={powerDialer.stats}
+                            callState={callState}
+                            duration={duration}
+                            isMuted={isMuted}
+                            toggleMute={toggleMute}
+                            hangUp={twilioHangUp}
+                            deviceReady={deviceReady}
+                            onPause={powerDialer.pauseSession}
+                            onResume={powerDialer.resumeSession}
+                            onStop={powerDialer.stopSession}
+                            onSkip={powerDialer.skipLead}
                         />
-                    </div>
+                    ) : (
+                        /* ─── Normal Manual Dialer Mode ───────── */
+                        <div className="px-4 pb-4 animate-in slide-in-from-top-2 duration-200">
+                            {/* Contact Info (shown when calling from property) */}
+                            {(contactName || propertyAddress) && callState !== 'idle' && (
+                                <div className="mb-3 p-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
+                                    <div className="flex items-center gap-2">
+                                        <User className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                                        <div className="min-w-0">
+                                            {contactName && (
+                                                <p className="text-xs font-medium text-blue-700 dark:text-blue-300 truncate">
+                                                    {contactName}
+                                                </p>
+                                            )}
+                                            {propertyAddress && (
+                                                <p className="text-xs text-blue-600/70 dark:text-blue-400/70 truncate">
+                                                    {propertyAddress}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
-                    {/* Pending auto-call indicator */}
-                    {pendingAutoCall && !deviceReady && (
-                        <div className="mb-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            <span>Connecting to phone service...</span>
+                            {/* Number Display */}
+                            <div className="mb-4">
+                                <Input
+                                    value={number}
+                                    onChange={(e) => setNumber(e.target.value)}
+                                    placeholder="Enter number..."
+                                    className="text-center text-lg font-mono h-10 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950"
+                                    disabled={callState !== 'idle'}
+                                />
+                            </div>
+
+                            {/* Pending auto-call indicator */}
+                            {pendingAutoCall && !deviceReady && (
+                                <div className="mb-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    <span>Connecting to phone service...</span>
+                                </div>
+                            )}
+
+                            {/* Keypad */}
+                            {callState === 'idle' && !pendingAutoCall && (
+                                <div className="grid grid-cols-3 gap-2 mb-4">
+                                    {dialPad.flat().map((digit) => (
+                                        <Button
+                                            key={digit}
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-10 text-sm font-medium bg-white dark:bg-zinc-950 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                            onClick={() => addDigit(digit)}
+                                        >
+                                            {digit}
+                                        </Button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Controls */}
+                            <div className="flex items-center justify-center gap-3">
+                                {callState === 'idle' && !pendingAutoCall ? (
+                                    <>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-10 w-10 text-muted-foreground hover:text-foreground"
+                                            onClick={deleteDigit}
+                                            disabled={!number}
+                                        >
+                                            <Delete className="h-5 w-5" />
+                                        </Button>
+                                        <Button
+                                            size="icon"
+                                            className="h-12 w-12 rounded-full bg-green-600 hover:bg-green-700 shadow-sm"
+                                            onClick={makeCall}
+                                            disabled={!number.trim() || !deviceReady}
+                                        >
+                                            <Phone className="h-5 w-5" />
+                                        </Button>
+                                    </>
+                                ) : callState === 'connecting' || pendingAutoCall ? (
+                                    <Button
+                                        size="icon"
+                                        className="h-12 w-12 rounded-full bg-red-600 hover:bg-red-700 shadow-sm"
+                                        onClick={hangUp}
+                                    >
+                                        <Loader2 className="h-5 w-5 animate-spin" />
+                                    </Button>
+                                ) : (
+                                    <>
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            className={cn(
+                                                "h-10 w-10 rounded-full transition-colors",
+                                                isMuted
+                                                    ? "bg-red-50 border-red-200 text-red-600 dark:bg-red-950/30 dark:border-red-900/50 dark:text-red-400"
+                                                    : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                            )}
+                                            onClick={toggleMute}
+                                            title={isMuted ? 'Unmute' : 'Mute'}
+                                        >
+                                            {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                                        </Button>
+                                        <Button
+                                            size="icon"
+                                            className="h-12 w-12 rounded-full bg-red-600 hover:bg-red-700 shadow-sm"
+                                            onClick={hangUp}
+                                        >
+                                            <PhoneOff className="h-5 w-5" />
+                                        </Button>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Mute label */}
+                            {(callState === 'ringing' || callState === 'live') && (
+                                <p className="text-center text-xs text-muted-foreground mt-2">
+                                    {isMuted ? 'Muted' : 'Tap mic to mute'}
+                                </p>
+                            )}
+
+                            {/* Twilio error with retry */}
+                            {twilioError && !initializing && (
+                                <div className="mt-3 text-center">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="text-xs"
+                                        onClick={retry}
+                                    >
+                                        Retry Connection
+                                    </Button>
+                                </div>
+                            )}
                         </div>
                     )}
-
-                    {/* Keypad */}
-                    {callState === 'idle' && !pendingAutoCall && (
-                        <div className="grid grid-cols-3 gap-2 mb-4">
-                            {dialPad.flat().map((digit) => (
-                                <Button
-                                    key={digit}
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-10 text-sm font-medium bg-white dark:bg-zinc-950 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                                    onClick={() => addDigit(digit)}
-                                >
-                                    {digit}
-                                </Button>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Controls */}
-                    <div className="flex items-center justify-center gap-3">
-                        {callState === 'idle' && !pendingAutoCall ? (
-                            <>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-10 w-10 text-muted-foreground hover:text-foreground"
-                                    onClick={deleteDigit}
-                                    disabled={!number}
-                                >
-                                    <Delete className="h-5 w-5" />
-                                </Button>
-                                <Button
-                                    size="icon"
-                                    className="h-12 w-12 rounded-full bg-green-600 hover:bg-green-700 shadow-sm"
-                                    onClick={makeCall}
-                                    disabled={!number.trim() || !deviceReady}
-                                >
-                                    <Phone className="h-5 w-5" />
-                                </Button>
-                            </>
-                        ) : callState === 'connecting' || pendingAutoCall ? (
-                            <Button
-                                size="icon"
-                                className="h-12 w-12 rounded-full bg-red-600 hover:bg-red-700 shadow-sm"
-                                onClick={hangUp}
-                            >
-                                <Loader2 className="h-5 w-5 animate-spin" />
-                            </Button>
-                        ) : (
-                            <>
-                                <Button
-                                    variant="outline"
-                                    size="icon"
-                                    className={cn(
-                                        "h-10 w-10 rounded-full transition-colors",
-                                        isMuted
-                                            ? "bg-red-50 border-red-200 text-red-600 dark:bg-red-950/30 dark:border-red-900/50 dark:text-red-400"
-                                            : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                                    )}
-                                    onClick={toggleMute}
-                                    title={isMuted ? 'Unmute' : 'Mute'}
-                                >
-                                    {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                                </Button>
-                                <Button
-                                    size="icon"
-                                    className="h-12 w-12 rounded-full bg-red-600 hover:bg-red-700 shadow-sm"
-                                    onClick={hangUp}
-                                >
-                                    <PhoneOff className="h-5 w-5" />
-                                </Button>
-                            </>
-                        )}
-                    </div>
-
-                    {/* Mute label */}
-                    {(callState === 'ringing' || callState === 'live') && (
-                        <p className="text-center text-xs text-muted-foreground mt-2">
-                            {isMuted ? 'Muted' : 'Tap mic to mute'}
-                        </p>
-                    )}
-
-                    {/* Twilio error with retry */}
-                    {twilioError && !initializing && (
-                        <div className="mt-3 text-center">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={retry}
-                            >
-                                Retry Connection
-                            </Button>
-                        </div>
-                    )}
-                </div>
+                </>
             )}
 
-            {/* Call Notes Modal */}
+            {/* ─── Call Notes Modal (shared by both modes) ─── */}
             <Dialog open={showNotesModal} onOpenChange={(open) => {
                 if (!open && !savingNotes) {
-                    setShowNotesModal(false);
-                    resetCall();
+                    skipNotesModal()
                 }
             }}>
                 <DialogContent>
@@ -441,10 +578,23 @@ export function DialerSidebarWidget() {
                     </DialogHeader>
                     <div className="space-y-4">
                         <div className="text-sm text-muted-foreground">
-                            <p>Called: {number}</p>
-                            {contactName && <p>Contact: {contactName}</p>}
-                            {propertyAddress && <p>Property: {propertyAddress}</p>}
-                            <p>Duration: {formatDuration(duration)}</p>
+                            {isPowerDialerActive && powerDialer.currentLead ? (
+                                <>
+                                    <p>Called: {powerDialer.currentPhone || 'Unknown'}</p>
+                                    {powerDialer.currentLead.ownerName && (
+                                        <p>Contact: {powerDialer.currentLead.ownerName}</p>
+                                    )}
+                                    <p>Property: {powerDialer.currentLead.address}</p>
+                                    <p>Duration: {formatDuration(duration)}</p>
+                                </>
+                            ) : (
+                                <>
+                                    <p>Called: {number}</p>
+                                    {contactName && <p>Contact: {contactName}</p>}
+                                    {propertyAddress && <p>Property: {propertyAddress}</p>}
+                                    <p>Duration: {formatDuration(duration)}</p>
+                                </>
+                            )}
                         </div>
                         <Textarea
                             placeholder="Add notes about this call..."
@@ -453,13 +603,19 @@ export function DialerSidebarWidget() {
                             className="min-h-[120px]"
                         />
                         <div className="flex flex-wrap gap-2">
-                            {['No Answer', 'Left Voicemail', 'Interested', 'Not Interested', 'Wrong Number'].map((tag) => (
+                            {QUICK_TAGS.map((tag) => (
                                 <Button
                                     key={tag}
                                     variant="outline"
                                     size="sm"
-                                    className="text-xs"
-                                    onClick={() => setCallNotes((n) => (n ? `${n}\n${tag}` : tag))}
+                                    className={cn(
+                                        "text-xs",
+                                        lastTag === tag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30"
+                                    )}
+                                    onClick={() => {
+                                        setCallNotes((n) => (n ? `${n}\n${tag}` : tag))
+                                        setLastTag(tag)
+                                    }}
                                 >
                                     {tag}
                                 </Button>
@@ -467,7 +623,7 @@ export function DialerSidebarWidget() {
                         </div>
                     </div>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => { setShowNotesModal(false); resetCall() }}>
+                        <Button variant="outline" onClick={skipNotesModal}>
                             Skip
                         </Button>
                         <Button onClick={saveCallNotes} disabled={savingNotes}>
@@ -477,6 +633,33 @@ export function DialerSidebarWidget() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* ─── Power Dialer Dialogs ──────────────────── */}
+            <PowerDialerSetupDialog
+                open={powerDialer.showSetupDialog}
+                onOpenChange={(open) => {
+                    if (!open) powerDialer.closeSetup()
+                }}
+                onStart={powerDialer.startSession}
+                onEditTemplates={powerDialer.openTemplateEditor}
+            />
+
+            <PowerDialerSkipTraceDialog
+                open={powerDialer.showSkipTraceDialog}
+                lead={powerDialer.currentLead}
+                onSkip={powerDialer.skipLead}
+                onPhoneFound={powerDialer.retryAfterSkipTrace}
+                onOpenChange={(open) => {
+                    if (!open) powerDialer.closeSkipTrace()
+                }}
+            />
+
+            <SMSTemplateEditorDialog
+                open={powerDialer.showTemplateEditor}
+                onOpenChange={(open) => {
+                    if (!open) powerDialer.closeTemplateEditor()
+                }}
+            />
         </div>
     )
 }

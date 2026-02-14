@@ -103,6 +103,20 @@ export function RentalComps({
   const currentData = compType === 'rental' ? rentalData : soldData
   const hasData = !!currentData
 
+  // Client-side filtering by listing status
+  const filteredComps = (() => {
+    const comps = compType === 'rental' ? rentalData?.comparables : soldData?.comparables
+    if (!comps) return []
+    if (!filters.listingStatus || filters.listingStatus === 'all') return comps
+    return comps.filter((comp) => {
+      const s = (comp.status || '').toLowerCase()
+      if (!s) return true // If no status data, show in all views
+      if (filters.listingStatus === 'active') return s === 'active'
+      if (filters.listingStatus === 'closed') return s !== 'active' && s !== ''
+      return true
+    })
+  })()
+
   if (loading) {
     return (
       <Card className="shadow-sm">
@@ -195,68 +209,81 @@ export function RentalComps({
               </div>
 
               {/* Comparables List */}
-              {((compType === 'rental' && rentalData?.comparables) ||
-                (compType === 'sold' && soldData?.comparables)) && (
-                  <div>
-                    <p className="text-sm font-medium mb-2">
-                      Comparable {compType === 'rental' ? 'Rentals' : 'Sales'}
-                    </p>
-                    <div className="space-y-2">
-                      {(compType === 'rental' ? rentalData?.comparables : soldData?.comparables)?.map((comp, i) => (
-                        <div
-                          key={i}
-                          onClick={() => setSelectedComp(comp)}
-                          className="flex items-center justify-between text-sm bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2.5 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
-                        >
-                          <div className="min-w-0 flex-1">
+              {filteredComps.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium mb-2">
+                    Comparable {compType === 'rental' ? 'Rentals' : 'Sales'}
+                    {filters.listingStatus && filters.listingStatus !== 'all' && (
+                      <span className="text-xs font-normal text-muted-foreground ml-1">
+                        ({filteredComps.length} {filters.listingStatus})
+                      </span>
+                    )}
+                  </p>
+                  <div className="space-y-2">
+                    {filteredComps.map((comp, i) => (
+                      <div
+                        key={i}
+                        onClick={() => setSelectedComp(comp)}
+                        className="flex items-center justify-between text-sm bg-zinc-50 dark:bg-zinc-800 rounded-lg p-2.5 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
                             <p className="text-xs truncate font-medium">{comp.address}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {comp.bedrooms}bd / {comp.bathrooms}ba · {comp.sqft?.toLocaleString()} sqft
-                            </p>
+                            {comp.status && (
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium leading-none ${comp.status.toLowerCase() === 'active'
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400'
+                                }`}>
+                                {comp.status.toLowerCase() === 'active' ? 'Active' : 'Closed'}
+                              </span>
+                            )}
                           </div>
-                          <div className="text-right flex-shrink-0 ml-2">
-                            <p className="font-semibold">
-                              ${compType === 'rental'
-                                ? (comp as RentalComp).rent?.toLocaleString()
-                                : (comp as SoldComp).price?.toLocaleString()
-                              }
-                              {compType === 'rental' && <span className="font-normal text-xs">/mo</span>}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {comp.distance?.toFixed(1)} mi
-                              {compType === 'sold' && (comp as SoldComp).soldDate && (
-                                <> · {new Date((comp as SoldComp).soldDate).toLocaleDateString()}</>
-                              )}
-                            </p>
-                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {comp.bedrooms}bd / {comp.bathrooms}ba · {comp.sqft?.toLocaleString()} sqft
+                          </p>
                         </div>
-                      ))}
-                    </div>
+                        <div className="text-right flex-shrink-0 ml-2">
+                          <p className="font-semibold">
+                            ${compType === 'rental'
+                              ? (comp as RentalComp).rent?.toLocaleString()
+                              : (comp as SoldComp).price?.toLocaleString()
+                            }
+                            {compType === 'rental' && <span className="font-normal text-xs">/mo</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {comp.distance?.toFixed(1)} mi
+                            {compType === 'sold' && (comp as SoldComp).soldDate && (
+                              <> · {new Date((comp as SoldComp).soldDate).toLocaleDateString()}</>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
+                </div>
+              )}
 
               {/* Map Section */}
-              {((compType === 'rental' && rentalData?.comparables && rentalData.comparables.length > 0) ||
-                (compType === 'sold' && soldData?.comparables && soldData.comparables.length > 0)) && (
-                  <div className="space-y-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => setShowMap(!showMap)}
-                    >
-                      <Map className="mr-2 h-4 w-4" />
-                      {showMap ? 'Hide Map' : 'Show Map'}
-                    </Button>
-                    {showMap && (
-                      <CompsMap
-                        subjectAddress={address}
-                        comps={compType === 'rental' ? (rentalData?.comparables || []) : (soldData?.comparables || [])}
-                        compType={compType}
-                      />
-                    )}
-                  </div>
-                )}
+              {filteredComps.length > 0 && (
+                <div className="space-y-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setShowMap(!showMap)}
+                  >
+                    <Map className="mr-2 h-4 w-4" />
+                    {showMap ? 'Hide Map' : 'Show Map'}
+                  </Button>
+                  {showMap && (
+                    <CompsMap
+                      subjectAddress={address}
+                      comps={filteredComps}
+                      compType={compType}
+                    />
+                  )}
+                </div>
+              )}
 
               {/* Refresh Button */}
               <Button

@@ -72,6 +72,7 @@ export function CompsFilters({
     const [radius, setRadius] = useState('1')
     const [compCount, setCompCount] = useState('5')
     const [daysOld, setDaysOld] = useState('180')
+    const [listingStatus, setListingStatus] = useState<'active' | 'closed' | 'all'>('all')
 
     // Property filters with defaults from subject (capped to max dropdown options)
     const getDefaultBeds = () => {
@@ -112,6 +113,9 @@ export function CompsFilters({
         }
         if (sqftMax) {
             filters.sqftMax = parseInt(sqftMax)
+        }
+        if (listingStatus !== 'all') {
+            filters.listingStatus = listingStatus
         }
 
         onFiltersChange(filters)
@@ -246,6 +250,25 @@ export function CompsFilters({
                                     ))}
                                 </SelectContent>
                             </Select>
+                        </div>
+
+                        {/* Listing Status */}
+                        <div className="space-y-1 col-span-2">
+                            <Label className="text-xs">Listing Status</Label>
+                            <div className="flex rounded-lg border p-0.5 bg-zinc-100 dark:bg-zinc-800">
+                                {(['all', 'active', 'closed'] as const).map((s) => (
+                                    <button
+                                        key={s}
+                                        onClick={() => setListingStatus(s)}
+                                        className={`flex-1 px-2 py-1 text-xs font-medium rounded-md transition-colors capitalize ${listingStatus === s
+                                                ? 'bg-white dark:bg-zinc-700 shadow-sm'
+                                                : 'text-muted-foreground hover:text-foreground'
+                                            }`}
+                                    >
+                                        {s}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </div>
 

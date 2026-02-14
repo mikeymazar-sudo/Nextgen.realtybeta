@@ -41,12 +41,26 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
 
     const { data: existing } = await query.limit(1).single()
 
-    if (existing) {
-      return apiSuccess(existing, true)
+    if (existing && existing.raw_attom_data) {
+      // Alias raw_attom_data to raw_realestate_data for the frontend
+      const { raw_attom_data, ...rest } = existing
+      const response = {
+        ...rest,
+        raw_realestate_data: raw_attom_data
+      }
+      return apiSuccess(response, true)
     }
 
     // Call RealEstateAPI PropertyDetail
     const reApiUrl = 'https://api.realestateapi.com/v2/PropertyDetail'
+
+    // RealEstateAPI expects a fully formatted address string
+    // e.g. "123 Main St, Arlington VA 22205"
+    const fullAddress = [
+      address,
+      [city, state].filter(Boolean).join(' '),
+      zip,
+    ].filter(Boolean).join(', ')
 
     const reApiRes = await fetch(reApiUrl, {
       method: 'POST',
@@ -56,10 +70,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
         'x-api-key': process.env.REAPI_SECRET_KEY!,
       },
       body: JSON.stringify({
-        address: address,
-        city: city || undefined,
-        state: state || undefined,
-        zip: zip || undefined,
+        address: fullAddress,
       }),
     })
 
@@ -76,38 +87,62 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
       return Errors.notFound('Property')
     }
 
-    // Normalize RealEstateAPI data
-    const normalized = {
-      address: prop.address?.address || prop.address?.oneLine || address,
-      city: prop.address?.city || city || null,
-      state: prop.address?.state || state || null,
-      zip: prop.address?.zip || prop.address?.zipCode || zip || null,
-      list_price: prop.saleInfo?.salePrice || prop.taxInfo?.assessedValue || null,
-      bedrooms: prop.buildingInfo?.bedrooms || null,
-      bathrooms: prop.buildingInfo?.bathrooms || null,
-      sqft: prop.buildingInfo?.livingSquareFeet || prop.buildingInfo?.totalSquareFeet || null,
-      year_built: prop.buildingInfo?.yearBuilt || null,
-      lot_size: prop.lotInfo?.lotSquareFeet || prop.lotInfo?.lotAcres || null,
-      property_type: prop.propertyType || prop.buildingInfo?.propertyType || null,
-      owner_name: prop.ownerInfo?.owner1FullName || prop.ownerInfo?.ownerName || null,
+    // Normalize RealEstateAPI v2 data for DB storage
+    const propInfo = prop.propertyInfo || {}
+    const propAddr = propInfo.address || {}
+    const apiFields = {
+      address: propAddr.address || propAddr.label || address,
+      city: propAddr.city || city || null,
+      state: propAddr.state || state || null,
+      zip: propAddr.zip || zip || null,
+      list_price: prop.estimatedValue || prop.lastSalePrice || prop.taxInfo?.assessedValue || null,
+      bedrooms: propInfo.bedrooms || null,
+      bathrooms: propInfo.bathrooms || null,
+      sqft: propInfo.livingSquareFeet || propInfo.buildingSquareFeet || null,
+      year_built: propInfo.yearBuilt || null,
+      lot_size: propInfo.lotSquareFeet || prop.lotInfo?.lotSquareFeet || null,
+      property_type: prop.propertyType || propInfo.propertyUse || null,
+      owner_name: prop.ownerInfo?.owner1FullName || null,
       raw_attom_data: reApiData,
-      created_by: user.id,
-      status: 'new' as const,
     }
 
-    // Save to database
-    const { data: saved, error: saveError } = await supabase
-      .from('properties')
-      .upsert(normalized, { onConflict: 'address,city,state,zip' })
-      .select()
-      .single()
+    // Save to database — update existing or insert new
+    let saved: any
+    let saveError: any
+
+    if (existing) {
+      // Property exists but had no raw_attom_data — update it without overwriting status/created_by
+      const res = await supabase
+        .from('properties')
+        .update(apiFields)
+        .eq('id', existing.id)
+        .select()
+        .single()
+      saved = res.data
+      saveError = res.error
+    } else {
+      const res = await supabase
+        .from('properties')
+        .upsert({ ...apiFields, created_by: user.id, status: 'new' as const }, { onConflict: 'address,city,state,zip' })
+        .select()
+        .single()
+      saved = res.data
+      saveError = res.error
+    }
 
     if (saveError) {
       console.error('Save error:', saveError)
       return Errors.internal(saveError.message)
     }
 
-    return apiSuccess(saved, false)
+    // Alias raw_attom_data to raw_realestate_data for the frontend
+    const { raw_attom_data, ...rest } = saved
+    const response = {
+      ...rest,
+      raw_realestate_data: raw_attom_data
+    }
+
+    return apiSuccess(response, false)
   } catch (error) {
     console.error('Property lookup error:', error)
     return Errors.internal()

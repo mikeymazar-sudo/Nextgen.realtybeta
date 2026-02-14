@@ -17,6 +17,7 @@ export interface CompFilterOptions {
   baths?: number
   sqftMin?: number
   sqftMax?: number
+  listingStatus?: 'active' | 'closed' | 'all' // Client-side filter for comp status
 }
 
 class ApiClient {
@@ -160,6 +161,17 @@ class ApiClient {
     })
   }
 
+  async getCalls(propertyId: string) {
+    return this.request<import('@/types/schema').Call[]>(`/api/voice/calls?propertyId=${propertyId}`)
+  }
+
+  async transcribeCall(callId: string) {
+    return this.request<{ transcript: string; status: string }>('/api/ai/transcribe', {
+      method: 'POST',
+      body: JSON.stringify({ callId }),
+    })
+  }
+
   // Notes
   async getNotes(propertyId: string) {
     return this.request<Note[]>(`/api/notes?propertyId=${propertyId}`)
@@ -188,6 +200,14 @@ class ApiClient {
   // Activity
   async getActivityTimeline(propertyId: string) {
     return this.request<ActivityItem[]>(`/api/activity?propertyId=${propertyId}`)
+  }
+
+  // SMS
+  async sendSms(to: string, message: string, contactId?: string, propertyId?: string) {
+    return this.request<{ success: boolean; messageSid?: string; messageId?: string }>('/api/sms/send', {
+      method: 'POST',
+      body: JSON.stringify({ to, message, contactId, propertyId }),
+    })
   }
 
   // Email

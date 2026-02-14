@@ -16,6 +16,25 @@ interface EmailEntry {
     is_primary: boolean
 }
 
+// Normalize old string[] format to PhoneEntry[]/EmailEntry[] objects
+function normalizePhones(raw: (string | PhoneEntry)[]): PhoneEntry[] {
+    return (raw || []).map((p, i) => {
+        if (typeof p === 'string') {
+            return { value: p, label: 'mobile', is_primary: i === 0 }
+        }
+        return { value: p.value || '', label: p.label || 'mobile', is_primary: !!p.is_primary }
+    })
+}
+
+function normalizeEmails(raw: (string | EmailEntry)[]): EmailEntry[] {
+    return (raw || []).map((e, i) => {
+        if (typeof e === 'string') {
+            return { value: e, label: 'personal', is_primary: i === 0 }
+        }
+        return { value: e.value || '', label: e.label || 'personal', is_primary: !!e.is_primary }
+    })
+}
+
 const UpdateContactSchema = z.object({
     type: z.enum(['phone', 'email']),
     index: z.number().int().min(0),
@@ -54,7 +73,7 @@ export const PATCH = withAuth(async (
         let updateData: Record<string, unknown> = {}
 
         if (type === 'phone') {
-            const phones: PhoneEntry[] = [...(contact.phone_numbers || [])]
+            const phones: PhoneEntry[] = normalizePhones(contact.phone_numbers || [])
             if (index < 0 || index >= phones.length) {
                 return Errors.badRequest('Invalid index')
             }
@@ -72,7 +91,7 @@ export const PATCH = withAuth(async (
             }
             updateData.phone_numbers = phones
         } else {
-            const emails: EmailEntry[] = [...(contact.emails || [])]
+            const emails: EmailEntry[] = normalizeEmails(contact.emails || [])
             if (index < 0 || index >= emails.length) {
                 return Errors.badRequest('Invalid index')
             }
@@ -140,7 +159,7 @@ export const DELETE = withAuth(async (
         let updateData: Record<string, unknown> = {}
 
         if (type === 'phone') {
-            const phones: PhoneEntry[] = [...(contact.phone_numbers || [])]
+            const phones: PhoneEntry[] = normalizePhones(contact.phone_numbers || [])
             if (index >= phones.length) {
                 return Errors.badRequest('Invalid index')
             }
@@ -155,7 +174,7 @@ export const DELETE = withAuth(async (
 
             updateData.phone_numbers = phones
         } else {
-            const emails: EmailEntry[] = [...(contact.emails || [])]
+            const emails: EmailEntry[] = normalizeEmails(contact.emails || [])
             if (index >= emails.length) {
                 return Errors.badRequest('Invalid index')
             }

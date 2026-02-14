@@ -46,6 +46,7 @@ export interface Property {
   status_changed_at: string | null
   list_id: string | null
   list?: LeadList
+  raw_realestate_data?: Record<string, any> | null
 }
 
 export interface LeadList {
@@ -78,6 +79,7 @@ export interface RentalComp {
   daysOnMarket?: number
   yearBuilt?: number
   lotSize?: number
+  status?: string
 }
 
 export interface SoldComp {
@@ -93,6 +95,7 @@ export interface SoldComp {
   propertyType?: string
   yearBuilt?: number
   lotSize?: number
+  status?: string
 }
 
 export interface SoldEstimate {
@@ -149,6 +152,10 @@ export interface Call {
   status: string | null
   duration: number | null
   notes: string | null
+  recording_sid: string | null
+  recording_url: string | null
+  transcript: string | null
+  transcription_status: 'none' | 'processing' | 'completed' | 'failed'
   created_at: string
   ended_at: string | null
 }
@@ -195,6 +202,50 @@ export interface ActivityItem {
   status?: string
   user: string | null
   created_at: string
+}
+
+// Power Dialer types
+export type PowerDialerMode =
+  | 'IDLE'
+  | 'SETUP'
+  | 'LOADING_QUEUE'
+  | 'READY'
+  | 'SENDING_SMS'
+  | 'DIALING'
+  | 'REDIALING'
+  | 'IN_CALL'
+  | 'SKIP_TRACING'
+  | 'DISPOSITION'
+  | 'PAUSED'
+  | 'COMPLETED'
+
+export interface PowerDialerLead {
+  propertyId: string
+  address: string
+  city: string | null
+  state: string | null
+  zip: string | null
+  ownerName: string | null
+  ownerPhone: string[] | null
+  contactId: string | null
+  contactPhones: string[] | null
+  dialStatus: 'pending' | 'called' | 'skipped' | 'no_answer' | 'interested' | 'not_interested'
+}
+
+export interface PowerDialerSettings {
+  listId: string | null // null = "All New Leads"
+  doubleDial: boolean
+  preSms: boolean
+  smsTemplateIndex: number
+}
+
+export interface PowerDialerSessionStats {
+  total: number
+  called: number
+  noAnswer: number
+  interested: number
+  notInterested: number
+  skipped: number
 }
 
 export interface ApiResponse<T> {

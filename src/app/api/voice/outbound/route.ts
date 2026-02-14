@@ -12,6 +12,7 @@ export async function POST(req: NextRequest) {
       const dial = twiml.dial({
         callerId: process.env.TWILIO_PHONE_NUMBER!,
         answerOnBridge: true,
+        record: 'record-from-answer',
       })
       dial.number(to)
     } else {

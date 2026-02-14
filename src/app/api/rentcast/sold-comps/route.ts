@@ -107,6 +107,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                 propertyType: comp.propertyType || null,
                 yearBuilt: comp.yearBuilt || null,
                 lotSize: comp.lotSize || null,
+                status: comp.status || comp.listingType || null,
             })),
         }
 

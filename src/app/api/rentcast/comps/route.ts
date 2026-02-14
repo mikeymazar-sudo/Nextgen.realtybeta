@@ -104,6 +104,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
         longitude: comp.longitude || null,
         propertyType: comp.propertyType || null,
         yearBuilt: comp.yearBuilt || null,
+        status: comp.status || comp.listingType || null,
       })),
     }
 

@@ -41,7 +41,8 @@ export function KanbanBoard({ leads, selectedIds, onSelect, onUpdate }: KanbanBo
     const sensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
-                distance: 8,
+                delay: 150,
+                tolerance: 5,
             },
         }),
         useSensor(KeyboardSensor, {
