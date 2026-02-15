@@ -27,6 +27,7 @@ interface ImportResult {
     imported: number
     skipped: number
     errors: number
+    errorDetails?: string
 }
 
 // The target fields we support
@@ -443,16 +444,42 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
                     imported += res.data?.imported || 0
                     skipped += res.data?.skipped || 0
                     errors += res.data?.errors || 0
+                    if (res.data?.errorDetails) {
+                        // Capture the first error detail we see
+                        setResult(prev => ({
+                            imported: prev?.imported || imported,
+                            skipped: prev?.skipped || skipped,
+                            errors: prev?.errors || errors,
+                            errorDetails: res.data.errorDetails
+                        }))
+                    }
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error('Import fetch error:', err)
                 errors += batch.length
+                // Only set error detail if we haven't set one yet
+                setResult(prev => ({
+                    imported: prev?.imported || imported,
+                    skipped: prev?.skipped || skipped,
+                    errors: prev?.errors || errors,
+                    errorDetails: prev?.errorDetails || err.message || 'Network error'
+                }))
             }
 
             setProgress(Math.round(((i + batch.length) / rawRows.length) * 100))
         }
 
-        setResult({ imported, skipped, errors })
+        if (!result?.errorDetails) {
+            setResult({ imported, skipped, errors, errorDetails: result?.errorDetails })
+        } else {
+            // If we already set an error detail in the loop, update the counts
+            setResult(prev => ({
+                imported,
+                skipped,
+                errors,
+                errorDetails: prev?.errorDetails
+            }))
+        }
         setImporting(false)
 
         if (imported > 0) {
@@ -804,6 +831,11 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
                                         <div className="flex items-center gap-2 text-red-600">
                                             <XCircle className="h-4 w-4" />
                                             <span>{result.errors} errors</span>
+                                        </div>
+                                    )}
+                                    {result.errorDetails && (
+                                        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-xs text-red-700 dark:text-red-400 font-mono break-all">
+                                            Error: {result.errorDetails}
                                         </div>
                                     )}
                                     <Button onClick={() => setOpen(false)} className="w-full mt-2">

@@ -166,6 +166,14 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                 if (error) {
                     console.error('Batch insert error:', error.message, error.code, error.details);
                     errors += rows.length;
+                    // If the first batch fails, we can assume something is wrong with the schema or connection
+                    return apiSuccess({
+                        imported,
+                        skipped,
+                        errors: errors + (properties.length - (i + batchSize)), // All remaining rows are effectively errors
+                        listId,
+                        errorDetails: error.message
+                    });
                 } else {
                     imported += data?.length || 0;
 
