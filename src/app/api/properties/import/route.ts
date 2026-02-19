@@ -216,9 +216,17 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                             });
                         }
                         if (contactsToInsert.length > 0) {
-                            await supabase
+                            // Check which properties already have a contact, then only insert new ones
+                            const propIds = contactsToInsert.map((c: any) => c.property_id)
+                            const { data: existingContacts } = await supabase
                                 .from('contacts')
-                                .upsert(contactsToInsert, { onConflict: 'property_id', ignoreDuplicates: true });
+                                .select('property_id')
+                                .in('property_id', propIds)
+                            const existingPropIds = new Set((existingContacts || []).map((e: any) => e.property_id))
+                            const newContacts = contactsToInsert.filter((c: any) => !existingPropIds.has(c.property_id))
+                            if (newContacts.length > 0) {
+                                await supabase.from('contacts').insert(newContacts)
+                            }
                         }
                     }
                 }

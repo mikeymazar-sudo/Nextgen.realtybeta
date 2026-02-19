@@ -691,8 +691,9 @@ export function SkipTrace({ propertyId, ownerName, address, city, state, zip, ex
   const isCorporateOwned = normalizedData?.corporateOwned || false
   const isOwnerOccupied = normalizedData?.ownerOccupied || false
 
-  // No contacts yet - show search prompt
-  if (contacts.length === 0) {
+  // No contacts yet (or contacts exist but have no phone/email data) - show search prompt
+  const hasAnyContactData = allPhones.length > 0 || allEmails.length > 0
+  if (!hasAnyContactData) {
     return (
       <div className="space-y-6">
         <Card className="shadow-sm">
