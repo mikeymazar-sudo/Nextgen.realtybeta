@@ -27,10 +27,18 @@ const defaultCenter = {
     lng: -80.1918,
 }
 
-// Generate Zillow link
-function generateZillowLink(address: string): string {
+// Generate Zillow link - rental vs sold, with status awareness
+function generateZillowLink(address: string, type: 'rental' | 'sold', status?: string): string {
     const encoded = encodeURIComponent(address.replace(/,/g, ''))
-    return `https://www.zillow.com/homes/${encoded}_rb/`
+    if (type === 'rental') {
+        // Active rentals → for_rent search to find the live listing
+        // Closed/off-market → generic property page (shows photos, price history, rental estimates)
+        const isActive = status?.toLowerCase() === 'active'
+        return isActive
+            ? `https://www.zillow.com/homes/for_rent/${encoded}_rb/`
+            : `https://www.zillow.com/homes/${encoded}_rb/`
+    }
+    return `https://www.zillow.com/homes/recently_sold/${encoded}_rb/`
 }
 
 export function CompsMap({
@@ -268,7 +276,7 @@ export function CompsMap({
                                     {compMarkers[selectedMarker].comp.distance?.toFixed(1)} mi away
                                 </p>
                                 <a
-                                    href={generateZillowLink(compMarkers[selectedMarker].comp.address)}
+                                    href={generateZillowLink(compMarkers[selectedMarker].comp.address, compType, compMarkers[selectedMarker].comp.status)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"

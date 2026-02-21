@@ -102,7 +102,15 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
       year_built: propInfo.yearBuilt || null,
       lot_size: propInfo.lotSquareFeet || prop.lotInfo?.lotSquareFeet || null,
       property_type: prop.propertyType || propInfo.propertyUse || null,
-      owner_name: prop.ownerInfo?.owner1FullName || null,
+      owner_name: prop.ownerInfo?.owner1FullName
+        || [prop.ownerInfo?.owner1FirstName, prop.ownerInfo?.owner1LastName].filter(Boolean).join(' ')
+        || null,
+      owner_first_name: prop.ownerInfo?.owner1FirstName || null,
+      owner_last_name: prop.ownerInfo?.owner1LastName || null,
+      mailing_address: prop.ownerInfo?.mailAddress?.street || prop.ownerInfo?.mailAddress?.address || null,
+      mailing_city: prop.ownerInfo?.mailAddress?.city || null,
+      mailing_state: prop.ownerInfo?.mailAddress?.state || null,
+      mailing_zip: prop.ownerInfo?.mailAddress?.zip || null,
       raw_attom_data: reApiData,
     }
 

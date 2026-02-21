@@ -30,7 +30,13 @@ export interface Property {
   property_type: string | null
   status: 'new' | 'warm' | 'reach_out' | 'closed'
   owner_name: string | null
+  owner_first_name: string | null
+  owner_last_name: string | null
   owner_phone: string[] | null
+  mailing_address: string | null
+  mailing_city: string | null
+  mailing_state: string | null
+  mailing_zip: string | null
   rental_data: RentalEstimate | null
   rental_fetched_at: string | null
   sold_data: SoldEstimate | null

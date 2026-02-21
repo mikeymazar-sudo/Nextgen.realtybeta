@@ -15,7 +15,7 @@ import { Home, DollarSign, TrendingUp, ExternalLink, Bed, Bath, Ruler, Calendar,
 import { api, type CompFilterOptions } from '@/lib/api/client'
 import { toast } from 'sonner'
 import { CompsMap } from './comps-map'
-import { CompsFilters } from './comps-filters'
+import { CompsFilters, type CompDisplayFilters } from './comps-filters'
 import type { RentalEstimate, SoldEstimate, RentalComp, SoldComp } from '@/types/schema'
 
 interface CompsProps {
@@ -32,9 +32,15 @@ interface CompsProps {
 
 type CompType = 'rental' | 'sold'
 
-function generateZillowLink(address: string): string {
+function generateZillowLink(address: string, type: 'rental' | 'sold', status?: string): string {
   const encoded = encodeURIComponent(address.replace(/,/g, ''))
-  return `https://www.zillow.com/homes/${encoded}_rb/`
+  if (type === 'rental') {
+    const isActive = status?.toLowerCase() === 'active'
+    return isActive
+      ? `https://www.zillow.com/homes/for_rent/${encoded}_rb/`
+      : `https://www.zillow.com/homes/${encoded}_rb/`
+  }
+  return `https://www.zillow.com/homes/recently_sold/${encoded}_rb/`
 }
 
 export function RentalComps({
@@ -48,14 +54,23 @@ export function RentalComps({
   const [loading, setLoading] = useState(false)
   const [selectedComp, setSelectedComp] = useState<RentalComp | SoldComp | null>(null)
   const [showMap, setShowMap] = useState(false)
-  const [filters, setFilters] = useState<CompFilterOptions>({})
 
-  const fetchRentalComps = async (filterOverrides?: CompFilterOptions) => {
+  // Client-side display filters — applied instantly, no API calls
+  const [displayFilters, setDisplayFilters] = useState<CompDisplayFilters>({
+    beds: 'any',
+    baths: 'any',
+    sqftMin: '',
+    sqftMax: '',
+    radius: '1',
+    listingStatus: 'all',
+  })
+
+  const fetchRentalComps = async (params: { radius: number; compCount: number; daysOld: number; beds?: number; baths?: number; sqftMin?: number; sqftMax?: number }) => {
     setLoading(true)
     const result = await api.getRentalComps(
       propertyId, address,
       bedrooms || undefined, bathrooms || undefined, sqft || undefined,
-      filterOverrides || filters
+      params as CompFilterOptions
     )
     setLoading(false)
 
@@ -68,12 +83,12 @@ export function RentalComps({
     }
   }
 
-  const fetchSoldComps = async (filterOverrides?: CompFilterOptions) => {
+  const fetchSoldComps = async (params: { radius: number; compCount: number; daysOld: number; beds?: number; baths?: number; sqftMin?: number; sqftMax?: number }) => {
     setLoading(true)
     const result = await api.getSoldComps(
       propertyId, address,
       bedrooms || undefined, bathrooms || undefined, sqft || undefined,
-      filterOverrides || filters
+      params as CompFilterOptions
     )
     setLoading(false)
 
@@ -86,54 +101,93 @@ export function RentalComps({
     }
   }
 
-  const handleFiltersChange = (newFilters: CompFilterOptions) => {
-    setFilters(newFilters)
+  // Only called when user clicks "Fetch Comps" button
+  const handleFetchComps = (params: { radius: number; compCount: number; daysOld: number; beds?: number; baths?: number; sqftMin?: number; sqftMax?: number }) => {
     if (compType === 'rental') {
-      fetchRentalComps(newFilters)
+      fetchRentalComps(params)
     } else {
-      fetchSoldComps(newFilters)
+      fetchSoldComps(params)
     }
+  }
+
+  // Called instantly on every filter change — pure client-side, no API calls
+  const handleDisplayFiltersChange = (filters: CompDisplayFilters) => {
+    setDisplayFilters(filters)
   }
 
   const handleToggle = (type: CompType) => {
     setCompType(type)
-    // Don't auto-fetch - let user configure filters and click Apply & Fetch
   }
 
   const currentData = compType === 'rental' ? rentalData : soldData
   const hasData = !!currentData
 
-  // Client-side filtering by listing status
+  // Client-side filtering of already-fetched comps using display filters
   const filteredComps = (() => {
     const comps = compType === 'rental' ? rentalData?.comparables : soldData?.comparables
     if (!comps) return []
-    if (!filters.listingStatus || filters.listingStatus === 'all') return comps
+
     return comps.filter((comp) => {
-      const s = (comp.status || '').toLowerCase()
-      if (!s) return true // If no status data, show in all views
-      if (filters.listingStatus === 'active') return s === 'active'
-      if (filters.listingStatus === 'closed') return s !== 'active' && s !== ''
+      // Listing status filter
+      if (displayFilters.listingStatus !== 'all') {
+        const s = (comp.status || '').toLowerCase()
+        if (s) {
+          if (displayFilters.listingStatus === 'active' && s !== 'active') return false
+          if (displayFilters.listingStatus === 'closed' && s === 'active') return false
+        }
+      }
+
+      // Bedrooms filter
+      if (displayFilters.beds !== 'any') {
+        const filterBeds = parseInt(displayFilters.beds)
+        if (filterBeds === 5) {
+          if (comp.bedrooms < 5) return false
+        } else {
+          if (comp.bedrooms !== filterBeds) return false
+        }
+      }
+
+      // Bathrooms filter
+      if (displayFilters.baths !== 'any') {
+        const filterBaths = parseInt(displayFilters.baths)
+        if (filterBaths === 4) {
+          if (comp.bathrooms < 4) return false
+        } else {
+          if (comp.bathrooms !== filterBaths) return false
+        }
+      }
+
+      // Sqft min filter
+      if (displayFilters.sqftMin) {
+        const min = parseInt(displayFilters.sqftMin)
+        if (!isNaN(min) && comp.sqft && comp.sqft < min) return false
+      }
+
+      // Sqft max filter
+      if (displayFilters.sqftMax) {
+        const max = parseInt(displayFilters.sqftMax)
+        if (!isNaN(max) && comp.sqft && comp.sqft > max) return false
+      }
+
+      // Distance/radius filter
+      if (displayFilters.radius) {
+        const maxRadius = parseFloat(displayFilters.radius)
+        if (!isNaN(maxRadius) && comp.distance && comp.distance > maxRadius) return false
+      }
+
       return true
     })
   })()
 
-  if (loading) {
-    return (
-      <Card className="shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Home className="h-4 w-4 text-green-600" />
-            Property Comps
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-4 w-48" />
-          <Skeleton className="h-4 w-40" />
-        </CardContent>
-      </Card>
-    )
-  }
+  // Count active display filters for badge
+  const activeFilterCount = [
+    displayFilters.beds !== 'any',
+    displayFilters.baths !== 'any',
+    displayFilters.sqftMin !== '',
+    displayFilters.sqftMax !== '',
+    displayFilters.listingStatus !== 'all',
+    displayFilters.radius !== '1', // non-default radius
+  ].filter(Boolean).length
 
   return (
     <>
@@ -172,17 +226,28 @@ export function RentalComps({
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Filters - always visible so user can configure before fetching */}
+          {/* Filters — always visible */}
           <CompsFilters
             subjectBedrooms={bedrooms}
             subjectBathrooms={bathrooms}
             subjectSqft={sqft}
             compType={compType}
-            onFiltersChange={handleFiltersChange}
+            onDisplayFiltersChange={handleDisplayFiltersChange}
+            onFetchComps={handleFetchComps}
+            loading={loading}
             defaultExpanded={!hasData}
           />
 
-          {hasData && (
+          {/* Inline loading state */}
+          {loading && (
+            <div className="space-y-2 py-2">
+              <Skeleton className="h-8 w-32 mx-auto" />
+              <Skeleton className="h-4 w-48 mx-auto" />
+              <Skeleton className="h-4 w-40 mx-auto" />
+            </div>
+          )}
+
+          {!loading && hasData && (
             <>
               {/* Estimate Display */}
               <div className={`text-center rounded-lg p-4 ${compType === 'rental'
@@ -209,15 +274,14 @@ export function RentalComps({
               </div>
 
               {/* Comparables List */}
-              {filteredComps.length > 0 && (
+              {filteredComps.length > 0 ? (
                 <div>
                   <p className="text-sm font-medium mb-2">
                     Comparable {compType === 'rental' ? 'Rentals' : 'Sales'}
-                    {filters.listingStatus && filters.listingStatus !== 'all' && (
-                      <span className="text-xs font-normal text-muted-foreground ml-1">
-                        ({filteredComps.length} {filters.listingStatus})
-                      </span>
-                    )}
+                    <span className="text-xs font-normal text-muted-foreground ml-1">
+                      ({filteredComps.length}
+                      {activeFilterCount > 0 && ` filtered`})
+                    </span>
                   </p>
                   <div className="space-y-2">
                     {filteredComps.map((comp, i) => (
@@ -261,6 +325,10 @@ export function RentalComps({
                     ))}
                   </div>
                 </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-2">
+                  No comps match the current filters. Try adjusting your criteria.
+                </p>
               )}
 
               {/* Map Section */}
@@ -284,16 +352,6 @@ export function RentalComps({
                   )}
                 </div>
               )}
-
-              {/* Refresh Button */}
-              <Button
-                onClick={() => compType === 'rental' ? fetchRentalComps() : fetchSoldComps()}
-                variant="ghost"
-                size="sm"
-                className="w-full text-xs"
-              >
-                Refresh {compType === 'rental' ? 'Rental' : 'Sold'} Data
-              </Button>
             </>
           )}
         </CardContent>
@@ -370,7 +428,7 @@ export function RentalComps({
               <Button
                 variant="outline"
                 className="w-full"
-                onClick={() => window.open(generateZillowLink(selectedComp.address), '_blank')}
+                onClick={() => window.open(generateZillowLink(selectedComp.address, compType, selectedComp.status), '_blank')}
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 View on Zillow

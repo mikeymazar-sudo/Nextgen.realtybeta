@@ -11,15 +11,25 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
-import { ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react'
-import type { CompFilterOptions } from '@/lib/api/client'
+import { ChevronDown, ChevronUp, SlidersHorizontal, Search } from 'lucide-react'
+
+export interface CompDisplayFilters {
+    beds: string
+    baths: string
+    sqftMin: string
+    sqftMax: string
+    radius: string
+    listingStatus: 'active' | 'closed' | 'all'
+}
 
 interface CompsFiltersProps {
     subjectBedrooms: number | null
     subjectBathrooms: number | null
     subjectSqft: number | null
     compType: 'rental' | 'sold'
-    onFiltersChange: (filters: CompFilterOptions) => void
+    onDisplayFiltersChange: (filters: CompDisplayFilters) => void
+    onFetchComps: (params: { radius: number; compCount: number; daysOld: number; beds?: number; baths?: number; sqftMin?: number; sqftMax?: number }) => void
+    loading?: boolean
     defaultExpanded?: boolean
 }
 
@@ -65,16 +75,21 @@ export function CompsFilters({
     subjectBathrooms,
     subjectSqft,
     compType,
-    onFiltersChange,
+    onDisplayFiltersChange,
+    onFetchComps,
+    loading = false,
     defaultExpanded = false,
 }: CompsFiltersProps) {
     const [expanded, setExpanded] = useState(defaultExpanded)
+
+    // API fetch params
     const [radius, setRadius] = useState('1')
     const [compCount, setCompCount] = useState('5')
     const [daysOld, setDaysOld] = useState('180')
+
+    // Client-side display filters
     const [listingStatus, setListingStatus] = useState<'active' | 'closed' | 'all'>('all')
 
-    // Property filters with defaults from subject (capped to max dropdown options)
     const getDefaultBeds = () => {
         if (!subjectBedrooms) return 'any'
         if (subjectBedrooms >= 5) return '5'
@@ -88,37 +103,61 @@ export function CompsFilters({
     const [beds, setBeds] = useState(getDefaultBeds())
     const [baths, setBaths] = useState(getDefaultBaths())
 
-    // Calculate default sqft range (±20%)
     const defaultSqftMin = subjectSqft ? Math.round(subjectSqft * 0.8) : ''
     const defaultSqftMax = subjectSqft ? Math.round(subjectSqft * 1.2) : ''
     const [sqftMin, setSqftMin] = useState(defaultSqftMin.toString())
     const [sqftMax, setSqftMax] = useState(defaultSqftMax.toString())
 
-    const handleApplyFilters = () => {
-        const filters: CompFilterOptions = {
+    // Emit display filter changes instantly for client-side filtering
+    const emitDisplayFilters = (overrides: Partial<CompDisplayFilters> = {}) => {
+        onDisplayFiltersChange({
+            beds,
+            baths,
+            sqftMin,
+            sqftMax,
+            radius,
+            listingStatus,
+            ...overrides,
+        })
+    }
+
+    const handleBedsChange = (v: string) => {
+        setBeds(v)
+        emitDisplayFilters({ beds: v })
+    }
+    const handleBathsChange = (v: string) => {
+        setBaths(v)
+        emitDisplayFilters({ baths: v })
+    }
+    const handleSqftMinChange = (v: string) => {
+        setSqftMin(v)
+        emitDisplayFilters({ sqftMin: v })
+    }
+    const handleSqftMaxChange = (v: string) => {
+        setSqftMax(v)
+        emitDisplayFilters({ sqftMax: v })
+    }
+    const handleRadiusChange = (v: string) => {
+        setRadius(v)
+        emitDisplayFilters({ radius: v })
+    }
+    const handleListingStatusChange = (s: 'active' | 'closed' | 'all') => {
+        setListingStatus(s)
+        emitDisplayFilters({ listingStatus: s })
+    }
+
+    // Only fires an API call when user explicitly clicks the button
+    const handleFetchComps = () => {
+        const params: { radius: number; compCount: number; daysOld: number; beds?: number; baths?: number; sqftMin?: number; sqftMax?: number } = {
             radius: parseFloat(radius),
             compCount: parseInt(compCount),
             daysOld: parseInt(daysOld),
         }
-
-        // Add property filters if not "any"
-        if (beds !== 'any') {
-            filters.beds = parseInt(beds)
-        }
-        if (baths !== 'any') {
-            filters.baths = parseInt(baths)
-        }
-        if (sqftMin) {
-            filters.sqftMin = parseInt(sqftMin)
-        }
-        if (sqftMax) {
-            filters.sqftMax = parseInt(sqftMax)
-        }
-        if (listingStatus !== 'all') {
-            filters.listingStatus = listingStatus
-        }
-
-        onFiltersChange(filters)
+        if (beds !== 'any') params.beds = parseInt(beds)
+        if (baths !== 'any') params.baths = parseInt(baths)
+        if (sqftMin) params.sqftMin = parseInt(sqftMin)
+        if (sqftMax) params.sqftMax = parseInt(sqftMax)
+        onFetchComps(params)
     }
 
     return (
@@ -144,7 +183,7 @@ export function CompsFilters({
                         {/* Bedrooms */}
                         <div className="space-y-1">
                             <Label className="text-xs">Bedrooms</Label>
-                            <Select value={beds} onValueChange={setBeds}>
+                            <Select value={beds} onValueChange={handleBedsChange}>
                                 <SelectTrigger className="h-8 text-xs">
                                     <SelectValue />
                                 </SelectTrigger>
@@ -161,7 +200,7 @@ export function CompsFilters({
                         {/* Bathrooms */}
                         <div className="space-y-1">
                             <Label className="text-xs">Bathrooms</Label>
-                            <Select value={baths} onValueChange={setBaths}>
+                            <Select value={baths} onValueChange={handleBathsChange}>
                                 <SelectTrigger className="h-8 text-xs">
                                     <SelectValue />
                                 </SelectTrigger>
@@ -181,7 +220,7 @@ export function CompsFilters({
                             <Input
                                 type="number"
                                 value={sqftMin}
-                                onChange={(e) => setSqftMin(e.target.value)}
+                                onChange={(e) => handleSqftMinChange(e.target.value)}
                                 placeholder="e.g. 1500"
                                 className="h-8 text-xs"
                             />
@@ -193,7 +232,7 @@ export function CompsFilters({
                             <Input
                                 type="number"
                                 value={sqftMax}
-                                onChange={(e) => setSqftMax(e.target.value)}
+                                onChange={(e) => handleSqftMaxChange(e.target.value)}
                                 placeholder="e.g. 2500"
                                 className="h-8 text-xs"
                             />
@@ -202,7 +241,7 @@ export function CompsFilters({
                         {/* Radius */}
                         <div className="space-y-1">
                             <Label className="text-xs">Search Radius</Label>
-                            <Select value={radius} onValueChange={setRadius}>
+                            <Select value={radius} onValueChange={handleRadiusChange}>
                                 <SelectTrigger className="h-8 text-xs">
                                     <SelectValue />
                                 </SelectTrigger>
@@ -233,7 +272,7 @@ export function CompsFilters({
                             </Select>
                         </div>
 
-                        {/* Date Range - for both rental and sold */}
+                        {/* Date Range */}
                         <div className="space-y-1 col-span-2">
                             <Label className="text-xs">
                                 {compType === 'sold' ? 'Sale Date Range' : 'Listing Date Range'}
@@ -259,7 +298,7 @@ export function CompsFilters({
                                 {(['all', 'active', 'closed'] as const).map((s) => (
                                     <button
                                         key={s}
-                                        onClick={() => setListingStatus(s)}
+                                        onClick={() => handleListingStatusChange(s)}
                                         className={`flex-1 px-2 py-1 text-xs font-medium rounded-md transition-colors capitalize ${listingStatus === s
                                                 ? 'bg-white dark:bg-zinc-700 shadow-sm'
                                                 : 'text-muted-foreground hover:text-foreground'
@@ -277,12 +316,12 @@ export function CompsFilters({
                         <p>Subject: {subjectBedrooms || '?'} bd / {subjectBathrooms || '?'} ba / {subjectSqft?.toLocaleString() || '?'} sqft</p>
                     </div>
 
-                    <Button onClick={handleApplyFilters} size="sm" className="w-full">
-                        Apply & Fetch
+                    <Button onClick={handleFetchComps} size="sm" className="w-full" disabled={loading}>
+                        <Search className="mr-2 h-3.5 w-3.5" />
+                        {loading ? 'Fetching...' : 'Fetch Comps'}
                     </Button>
                 </div>
             )}
         </div>
     )
 }
-

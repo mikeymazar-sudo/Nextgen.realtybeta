@@ -75,7 +75,7 @@ export const GET = withAuth(async (req: NextRequest, { user, params }) => {
     const contactMap = matchResultsToProperties(rows, properties)
     console.log(`Matched ${contactMap.size} contacts to properties`)
 
-    // Save contacts
+    // Save TitanSkip contacts
     const contactsToInsert = Array.from(contactMap.values())
 
     if (contactsToInsert.length > 0) {
@@ -99,6 +99,89 @@ export const GET = withAuth(async (req: NextRequest, { user, params }) => {
       }
     }
 
+    // ─── BatchData fallback for properties TitanSkip didn't return results for ───
+    const propertiesWithTitanSkipResults = new Set(contactsToInsert.map(c => c.property_id))
+    const propertiesNeedingBatchData = properties.filter(p => !propertiesWithTitanSkipResults.has(p.id))
+    let batchDataContactsFound = 0
+
+    if (propertiesNeedingBatchData.length > 0) {
+      console.log(`TitanSkip had no results for ${propertiesNeedingBatchData.length} properties, falling back to BatchData...`)
+
+      // Fetch full property data for BatchData (need zip)
+      const { data: fullProperties } = await supabase
+        .from('properties')
+        .select('id, address, city, state, zip')
+        .in('id', propertiesNeedingBatchData.map(p => p.id))
+
+      for (const lead of (fullProperties || propertiesNeedingBatchData)) {
+        try {
+          const addressObj: Record<string, string> = { street: lead.address }
+          if (lead.city) addressObj.city = lead.city
+          if (lead.state) addressObj.state = lead.state
+          if ('zip' in lead && lead.zip) addressObj.zip = lead.zip as string
+
+          const batchRes = await fetch('https://api.batchdata.com/api/v1/property/skip-trace', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.BATCH_DATA_API_TOKEN}`,
+            },
+            body: JSON.stringify({
+              requests: [{ propertyAddress: addressObj }],
+            }),
+          })
+
+          if (batchRes.ok) {
+            const batchData = await batchRes.json()
+            const persons = batchData?.results?.persons || []
+
+            if (persons.length > 0) {
+              const contacts = persons.map((person: Record<string, any>) => {
+                const phoneNumbers = person.phoneNumbers || []
+                const phones = phoneNumbers
+                  .map((p: any) => p.number?.toString() || '')
+                  .filter((v: string) => v && /\d{7,}/.test(v.replace(/\D/g, '')))
+                  .slice(0, 3)
+                const emailList = person.emails || []
+                const emails = emailList
+                  .map((e: any) => e.email || e.address || '')
+                  .filter((v: string) => v && v.includes('@'))
+                  .slice(0, 3)
+                const nameObj = person.name || {}
+                const fullName = nameObj.full || [nameObj.first, nameObj.last].filter(Boolean).join(' ') || 'Unknown Owner'
+
+                return {
+                  property_id: lead.id,
+                  name: fullName,
+                  phone_numbers: phones,
+                  emails: emails,
+                  raw_batchdata_response: person,
+                }
+              })
+
+              const { error: bdInsertError } = await supabase.from('contacts').insert(contacts)
+              if (!bdInsertError) {
+                batchDataContactsFound++
+                // Update owner_phone
+                if (contacts[0].phone_numbers.length > 0) {
+                  await supabase
+                    .from('properties')
+                    .update({ owner_phone: contacts[0].phone_numbers })
+                    .eq('id', lead.id)
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`BatchData fallback error for property ${lead.id}:`, err)
+        }
+      }
+
+      console.log(`BatchData fallback: found contacts for ${batchDataContactsFound} out of ${propertiesNeedingBatchData.length} properties`)
+    }
+
+    const totalContactsFound = contactsToInsert.length + batchDataContactsFound
+
     // Mark job as processed
     await supabase
       .from('skip_trace_jobs')
@@ -110,14 +193,14 @@ export const GET = withAuth(async (req: NextRequest, { user, params }) => {
       })
       .eq('id', job.id)
 
-    console.log(`TitanSkip job ${traceId} processed: ${contactsToInsert.length} contacts saved`)
+    console.log(`TitanSkip job ${traceId} processed: ${contactsToInsert.length} TitanSkip + ${batchDataContactsFound} BatchData contacts saved`)
 
     return apiSuccess({
       status: 'completed',
       traceId,
-      contactsFound: contactsToInsert.length,
+      contactsFound: totalContactsFound,
       totalRows: rows.length,
-      message: `Found contacts for ${contactsToInsert.length} out of ${properties.length} properties`,
+      message: `Found contacts for ${totalContactsFound} out of ${properties.length} properties (${contactsToInsert.length} TitanSkip, ${batchDataContactsFound} BatchData)`,
     })
   } catch (error) {
     console.error('TitanSkip polling error:', error)

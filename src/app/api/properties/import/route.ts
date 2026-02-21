@@ -46,6 +46,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
         let imported = 0;
         let skipped = 0;
         let errors = 0;
+        const allPropertyIds: string[] = [];
 
         const batchSize = 100;
         for (let i = 0; i < properties.length; i += batchSize) {
@@ -147,9 +148,28 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                     lot_size: p.lot_size ? Number(p.lot_size) : null,
                     property_type: p.property_type,
                     list_price: p.list_price ? parseFloat(p.list_price.replace(/[^0-9.]/g, '')) : null,
-                    owner_name: p.owner_name,
+                    // Owner name: keep full name, and derive first/last if not provided
+                    owner_name: p.owner_name
+                        || (p.owner_first_name && p.owner_last_name
+                            ? `${p.owner_first_name} ${p.owner_last_name}`.trim()
+                            : p.owner_first_name || null),
+                    owner_first_name: p.owner_first_name
+                        || (p.owner_name ? p.owner_name.trim().split(/\s+/)[0] : null),
+                    owner_last_name: p.owner_last_name
+                        || (p.owner_name ? p.owner_name.trim().split(/\s+/).slice(1).join(' ') || null : null),
+                    // Mailing address as direct columns
+                    mailing_address: p.mailing_street || p.mailing_address || null,
+                    mailing_city: p.mailing_city || null,
+                    mailing_state: p.mailing_state || null,
+                    mailing_zip: p.mailing_zip || null,
+
                     owner_phone: (() => {
-                        const phones = [p.owner_phone, p.phone_1, p.phone_2, p.phone_3].filter(Boolean)
+                        const phones = [p.owner_phone, p.phone_1, p.phone_2, p.phone_3]
+                            .filter(Boolean)
+                            .filter((v: string) => {
+                                const digits = v.replace(/\D/g, '')
+                                return digits.length >= 7 && digits.length <= 15
+                            })
                         return phones.length > 0 ? phones : null
                     })(),
 
@@ -180,6 +200,10 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                     });
                 } else {
                     imported += data?.length || 0;
+                    // Collect property IDs for potential batch skip trace
+                    if (data) {
+                        allPropertyIds.push(...data.map((d: { id: string }) => d.id));
+                    }
 
                     // Create contacts for any properties that have phone/email data in the CSV
                     if (data && data.length > 0) {
@@ -189,14 +213,21 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                             const propertyId = data[j].id;
 
                             // Collect phones: owner_phone + phone_1/2/3, deduplicated, max 3
+                            // Validate: must have 7-15 digits to be a real phone number
                             const rawPhones = [p.owner_phone, p.phone_1, p.phone_2, p.phone_3]
                                 .filter(Boolean) as string[];
-                            const uniquePhones = [...new Set(rawPhones)].slice(0, 3);
+                            const validPhones = rawPhones.filter((v) => {
+                                const digits = v.replace(/\D/g, '')
+                                return digits.length >= 7 && digits.length <= 15
+                            })
+                            const uniquePhones = [...new Set(validPhones)].slice(0, 3);
 
                             // Collect emails: owner_email + email_1/2/3, deduplicated, max 3
+                            // Validate: must contain @ to be a real email
                             const rawEmails = [p.owner_email, p.email_1, p.email_2, p.email_3]
                                 .filter(Boolean) as string[];
-                            const uniqueEmails = [...new Set(rawEmails)].slice(0, 3);
+                            const validEmails = rawEmails.filter((v) => v.includes('@'))
+                            const uniqueEmails = [...new Set(validEmails)].slice(0, 3);
 
                             if (uniquePhones.length === 0 && uniqueEmails.length === 0) continue;
 
@@ -233,7 +264,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
             }
         }
 
-        return apiSuccess({ imported, skipped, errors, listId });
+        return apiSuccess({ imported, skipped, errors, listId, propertyIds: allPropertyIds });
 
     } catch (error) {
         console.error('Import error:', error);

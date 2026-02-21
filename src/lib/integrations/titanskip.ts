@@ -47,19 +47,26 @@ export interface TitanSkipResultRow {
 
 interface LeadForTitanSkip {
   owner_name: string | null
+  owner_first_name?: string | null
+  owner_last_name?: string | null
   address: string
   city: string | null
   state: string | null
+  mailing_address?: string | null
+  mailing_city?: string | null
+  mailing_state?: string | null
   raw_realestate_data?: Record<string, any> | null
 }
 
 // ─── Compatibility Check ────────────────────────────────────────────────────
 
 /**
- * A lead is TitanSkip-compatible when it has owner_name + address + city + state.
+ * A lead is TitanSkip-compatible when it has a name (first+last or full) + address + city + state.
  */
 export function isTitanSkipCompatible(lead: LeadForTitanSkip): boolean {
-  const hasName = !!lead.owner_name && lead.owner_name.trim().length >= 2
+  const hasFirstLast = !!lead.owner_first_name?.trim() && !!lead.owner_last_name?.trim()
+  const hasFullName = !!lead.owner_name && lead.owner_name.trim().length >= 2
+  const hasName = hasFirstLast || hasFullName
   const hasAddress = !!lead.address && lead.address.trim().length >= 3
   const hasCity = !!lead.city && lead.city.trim().length >= 1
   const hasState = !!lead.state && lead.state.trim().length >= 1
@@ -77,15 +84,25 @@ function splitOwnerName(ownerName: string): { first: string; last: string } {
 
 /**
  * Build a CSV string from an array of leads for TitanSkip upload.
+ * Prefers dedicated first/last name and mailing columns; falls back to
+ * splitting owner_name and extracting from raw_realestate_data.
  */
 export function buildTitanSkipCsv(leads: LeadForTitanSkip[]): string {
   const rows = leads.map((lead) => {
-    const { first, last } = splitOwnerName(lead.owner_name || '')
-    // Try to extract mailing info from raw_realestate_data if available
+    // Prefer dedicated first/last columns; fall back to splitting owner_name
+    let first = lead.owner_first_name?.trim() || ''
+    let last = lead.owner_last_name?.trim() || ''
+    if (!first && !last && lead.owner_name) {
+      const split = splitOwnerName(lead.owner_name)
+      first = split.first
+      last = split.last
+    }
+
+    // Prefer dedicated mailing columns; fall back to raw_realestate_data
     const raw = lead.raw_realestate_data || {}
-    const mailingAddress = raw.mailing_address || raw.mailingAddress || ''
-    const mailingCity = raw.mailing_city || raw.mailingCity || ''
-    const mailingState = raw.mailing_state || raw.mailingState || ''
+    const mailingAddress = lead.mailing_address || raw.mailing_address || raw.mailingAddress || ''
+    const mailingCity = lead.mailing_city || raw.mailing_city || raw.mailingCity || ''
+    const mailingState = lead.mailing_state || raw.mailing_state || raw.mailingState || ''
 
     return {
       first_name: first,
@@ -316,4 +333,57 @@ function normalizeAddress(address: string, city: string | null, state: string | 
   return [address, city, state]
     .map((s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' '))
     .join('|')
+}
+
+// ─── Single-Property Trace (submit + poll) ──────────────────────────────────
+
+/**
+ * Submit a single lead to TitanSkip as a 1-row CSV, then poll until results
+ * are ready. Returns the parsed contact data or null if it fails/times out.
+ *
+ * For a single row TitanSkip is fast (usually < 30s), so we inline the poll.
+ */
+export async function submitAndPollSingleTrace(
+  lead: LeadForTitanSkip
+): Promise<ReturnType<typeof mapTitanSkipRowToContact> | null> {
+  // Build a 1-row CSV
+  const csv = buildTitanSkipCsv([lead])
+
+  const submitResult = await submitTrace(csv)
+
+  if ('error' in submitResult) {
+    console.error('TitanSkip single trace submit failed:', submitResult.error)
+    return null
+  }
+
+  const { traceId } = submitResult
+  console.log(`TitanSkip single trace submitted: ${traceId}`)
+
+  // Poll until complete (max 90s, 3s intervals)
+  const trace = await pollTraceUntilComplete(traceId, 90000, 3000)
+
+  if (!trace || !trace.download_url) {
+    console.warn('TitanSkip single trace did not complete in time:', traceId)
+    return null
+  }
+
+  // Download and parse results
+  const rows = await downloadAndParseResults(trace.download_url)
+
+  if (rows.length === 0) {
+    console.log('TitanSkip single trace returned 0 rows')
+    return null
+  }
+
+  // For a single-property trace, take the first result row
+  // (TitanSkip returns the input row enriched with phone/email data)
+  const row = rows[0]
+  const contact = mapTitanSkipRowToContact(row, '') // propertyId will be set by caller
+
+  if (contact.phone_numbers.length === 0 && contact.emails.length === 0) {
+    console.log('TitanSkip single trace found no contact info')
+    return null
+  }
+
+  return contact
 }

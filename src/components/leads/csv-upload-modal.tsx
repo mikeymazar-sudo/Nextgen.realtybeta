@@ -12,8 +12,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Upload, FileSpreadsheet, Loader2, CheckCircle, XCircle, ArrowRight, ArrowLeft, ChevronDown } from 'lucide-react'
+import { Upload, FileSpreadsheet, Loader2, CheckCircle, XCircle, ArrowRight, ArrowLeft, ChevronDown, Search } from 'lucide-react'
 import { toast } from 'sonner'
+import { api } from '@/lib/api/client'
 
 interface CsvUploadModalProps {
     onImportComplete: () => void
@@ -38,7 +39,9 @@ const TARGET_FIELDS = [
     { key: 'state', label: 'State', group: 'Basic' },
     { key: 'zip', label: 'Zip Code', group: 'Basic' },
     { key: 'property_type', label: 'Property Type', group: 'Basic' },
-    { key: 'owner_name', label: 'Owner Name', group: 'Basic' },
+    { key: 'owner_name', label: 'Owner Name (Full)', group: 'Basic' },
+    { key: 'owner_first_name', label: 'Owner First Name', group: 'Basic' },
+    { key: 'owner_last_name', label: 'Owner Last Name', group: 'Basic' },
     { key: 'owner2_name', label: '2nd Owner Name', group: 'Basic' },
     { key: 'owner_phone', label: 'Owner Phone', group: 'Basic' },
     { key: 'owner_email', label: 'Owner Email', group: 'Basic' },
@@ -114,16 +117,40 @@ const TARGET_FIELDS = [
 
 type TargetFieldKey = (typeof TARGET_FIELDS)[number]['key']
 
-// Phone target field keys — used to apply extra validation before auto-mapping.
+// Phone & email target field keys — used to apply extra validation before auto-mapping.
 const PHONE_FIELD_KEYS = new Set<TargetFieldKey>(['owner_phone', 'phone_1', 'phone_2', 'phone_3'])
+const EMAIL_FIELD_KEYS = new Set<TargetFieldKey>(['owner_email', 'email_1', 'email_2', 'email_3'])
+const CONTACT_FIELD_KEYS = new Set<TargetFieldKey>([...PHONE_FIELD_KEYS, ...EMAIL_FIELD_KEYS])
 
-// Column name patterns that should NEVER be auto-mapped to phone fields.
-// These typically hold carrier names, line types, or DNC flags rather than actual numbers.
+// Column name patterns that should NEVER be auto-mapped to phone/email fields.
+// These typically hold carrier names, line types, DNC flags, or skip trace metadata
+// rather than actual phone numbers or email addresses.
 const CARRIER_COLUMN_BLOCKLIST = [
     'carrier', 'phone_type', 'phonetype', 'line_type', 'linetype',
     'phone_carrier', 'number_type', 'numbertype', 'dnc', 'do_not_call',
     'donotcall', 'type_of_phone', 'phone_line_type',
+    // Skip trace metadata date fields
+    'lastreporteddate', 'lastreported', 'firstreporteddate',
 ]
+
+// Suffixes that indicate metadata columns when they appear as the last segment
+// after a dot separator in structured column names (e.g., "Skiptrace:phoneNumbers.0.type").
+// These are NOT safe to add to the flat blocklist because they'd match legitimate
+// top-level fields (e.g., "property_type" contains "type").
+const METADATA_SUFFIXES = ['type', 'carrier', 'linetype', 'line_type']
+
+/**
+ * Check if a normalized column name is skip trace metadata rather than an actual value.
+ * e.g. "skiptrace:phonenumbers.0.type" → blocked (suffix "type")
+ *      "skiptrace:phonenumbers.0.number" → allowed (suffix "number")
+ *      "property_type" → not blocked (no dot separator)
+ */
+function isSkipTraceMetadataColumn(normalized: string): boolean {
+    const lastDotIndex = normalized.lastIndexOf('.')
+    if (lastDotIndex === -1) return false
+    const suffix = normalized.slice(lastDotIndex + 1)
+    return METADATA_SUFFIXES.includes(suffix)
+}
 
 // Keywords that suggest a CSV column should map to a target field.
 const FIELD_KEYWORDS: Record<TargetFieldKey, string[]> = {
@@ -133,7 +160,9 @@ const FIELD_KEYWORDS: Record<TargetFieldKey, string[]> = {
     state: ['state', 'province'],
     zip: ['zip', 'postal', 'postcode', 'zcode'],
     property_type: ['property_type', 'prop_type', 'type', 'use_code', 'land_use_desc', 'standardized_land_use'],
-    owner_name: ['owner', 'name', 'seller', 'grantor', 'contact', 'owner_1_fullname'],
+    owner_name: ['owner', 'name', 'seller', 'grantor', 'contact', 'owner_1_fullname', 'full_name', 'fullname'],
+    owner_first_name: ['first_name', 'firstname', 'owner_first', 'owner_1_first', 'owner1firstname', 'owner_first_name'],
+    owner_last_name: ['last_name', 'lastname', 'owner_last', 'owner_1_last', 'owner1lastname', 'surname', 'owner_last_name'],
     owner2_name: ['owner_2', 'owner_2_fullname', 'second_owner'],
     owner_phone: ['phone', 'mobile', 'cell', 'contact_phone', 'owner_phone', 'phonenumber', 'phone_number'],
     owner_email: ['email', 'mail', 'contact_email', 'owner_email', 'emailaddress', 'email_address'],
@@ -212,19 +241,21 @@ const FIELD_KEYWORDS: Record<TargetFieldKey, string[]> = {
  * Returns the target field key or '' (skip).
  */
 function autoDetectMapping(csvCol: string, alreadyMapped: Set<string>): string {
-    const normalized = csvCol.toLowerCase().trim().replace(/[\s\-]+/g, '_')
+    const normalized = csvCol.toLowerCase().trim().replace(/[\s\-:]+/g, '_')
 
-    // Never auto-map carrier/type columns to phone fields
+    // Never auto-map carrier/type/metadata columns to phone or email fields
     const isCarrierCol = CARRIER_COLUMN_BLOCKLIST.some(
         (blocked) => normalized === blocked || normalized.includes(blocked)
     )
+    const isMetadataCol = isSkipTraceMetadataColumn(normalized)
+    const blockFromContactFields = isCarrierCol || isMetadataCol
 
     let bestMatch = ''
     let bestScore = 0
 
     for (const field of TARGET_FIELDS) {
         if (alreadyMapped.has(field.key)) continue
-        if (isCarrierCol && PHONE_FIELD_KEYS.has(field.key as TargetFieldKey)) continue
+        if (blockFromContactFields && CONTACT_FIELD_KEYS.has(field.key as TargetFieldKey)) continue
 
         const keywords = FIELD_KEYWORDS[field.key]
 
@@ -279,16 +310,18 @@ function buildInitialMappings(csvColumns: string[], firstRow?: RawRow): Record<s
             }
         }
 
-        const normalized = col.toLowerCase().trim().replace(/[\s\-]+/g, '_')
+        const normalized = col.toLowerCase().trim().replace(/[\s\-:]+/g, '_')
 
-        // Never auto-map columns whose name indicates carrier/type data to phone fields
+        // Never auto-map carrier/type/metadata columns to phone or email fields
         const isCarrierCol = CARRIER_COLUMN_BLOCKLIST.some(
             (blocked) => normalized === blocked || normalized.includes(blocked)
         )
+        const isMetadataCol = isSkipTraceMetadataColumn(normalized)
+        const blockFromContactFields = isCarrierCol || isMetadataCol
 
         for (const field of TARGET_FIELDS) {
-            // Skip phone fields entirely for carrier-type columns
-            if (isCarrierCol && PHONE_FIELD_KEYS.has(field.key as TargetFieldKey)) continue
+            // Skip phone/email fields entirely for carrier-type or metadata columns
+            if (blockFromContactFields && CONTACT_FIELD_KEYS.has(field.key as TargetFieldKey)) continue
 
             const keywords = FIELD_KEYWORDS[field.key]
             let bestScore = 0
@@ -340,6 +373,16 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
     const [progress, setProgress] = useState(0)
     const [result, setResult] = useState<ImportResult | null>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+
+    // Skip trace state
+    const [skipTracing, setSkipTracing] = useState(false)
+    const [skipTraceStatus, setSkipTraceStatus] = useState('')
+    const [skipTraceResult, setSkipTraceResult] = useState<{
+        contactsFound?: number
+        titanSkipCount?: number
+        batchDataProcessed?: number
+        message?: string
+    } | null>(null)
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const selectedFile = e.target.files?.[0]
@@ -528,6 +571,179 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
         }
     }
 
+    const handleImportAndSkipTrace = async () => {
+        if (!file) return
+
+        setStep('importing')
+        setImporting(true)
+        setProgress(0)
+        setResult(null)
+        setSkipTracing(false)
+        setSkipTraceStatus('')
+        setSkipTraceResult(null)
+
+        let imported = 0
+        let skipped = 0
+        let errors = 0
+        const allPropertyIds: string[] = []
+
+        // Phase 1: Import (same logic as handleImport)
+        const mappedRows = rawRows.map(row => {
+            const mapped: Record<string, string | undefined> = {}
+            for (const [csvCol, targetField] of Object.entries(columnMappings)) {
+                if (targetField && row[csvCol]) {
+                    mapped[targetField] = row[csvCol]
+                }
+            }
+            return mapped
+        })
+
+        const validRows = mappedRows.filter(row => {
+            if (!row.address?.trim()) {
+                skipped++
+                return false
+            }
+            return true
+        })
+
+        const batchSize = 100
+        for (let i = 0; i < validRows.length; i += batchSize) {
+            const batch = validRows.slice(i, i + batchSize)
+
+            try {
+                const response = await fetch('/api/properties/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        properties: batch,
+                        listName: i === 0 ? listName.trim() : undefined,
+                    }),
+                })
+
+                const res = await response.json()
+
+                if (!response.ok) {
+                    console.error('Import API error:', res)
+                    errors += batch.length
+                } else {
+                    imported += res.data?.imported || 0
+                    skipped += res.data?.skipped || 0
+                    errors += res.data?.errors || 0
+                    if (res.data?.propertyIds) {
+                        allPropertyIds.push(...res.data.propertyIds)
+                    }
+                }
+            } catch (err: any) {
+                console.error('Import fetch error:', err)
+                errors += batch.length
+            }
+
+            setProgress(Math.round(((i + batch.length) / rawRows.length) * 100))
+        }
+
+        setResult({ imported, skipped, errors })
+        setImporting(false)
+
+        if (imported > 0) {
+            toast.success(`Imported ${imported} properties!`)
+            onImportComplete()
+        }
+
+        // Phase 2: Batch Skip Trace
+        if (allPropertyIds.length === 0) {
+            setSkipTraceStatus('No properties to skip trace')
+            return
+        }
+
+        setSkipTracing(true)
+        setSkipTraceStatus('Submitting skip trace request...')
+
+        try {
+            // Split into chunks of 500 (API limit)
+            const chunkSize = 500
+            let totalTitanSkip = 0
+            let totalBatchData = 0
+            let totalContacts = 0
+            let activeTraceId: string | null = null
+
+            for (let i = 0; i < allPropertyIds.length; i += chunkSize) {
+                const chunk = allPropertyIds.slice(i, i + chunkSize)
+                setSkipTraceStatus(`Submitting skip trace (${Math.min(i + chunkSize, allPropertyIds.length)}/${allPropertyIds.length} leads)...`)
+
+                const { data, error } = await api.batchSkipTrace(chunk, true)
+
+                if (error) {
+                    console.error('Batch skip trace error:', error)
+                    setSkipTraceStatus(`Skip trace error: ${error}`)
+                    continue
+                }
+
+                if (data) {
+                    totalTitanSkip += data.titanSkipCount || 0
+                    totalBatchData += data.batchDataProcessed || 0
+
+                    // If TitanSkip was used, we need to poll for results
+                    if (data.traceId) {
+                        activeTraceId = data.traceId
+                    }
+                }
+            }
+
+            // Phase 3: Poll for TitanSkip results if needed
+            if (activeTraceId) {
+                setSkipTraceStatus(`Processing ${totalTitanSkip} leads via TitanSkip...`)
+
+                const maxPollTime = 5 * 60 * 1000 // 5 minutes
+                const pollInterval = 5000 // 5 seconds
+                const startTime = Date.now()
+
+                while (Date.now() - startTime < maxPollTime) {
+                    await new Promise(resolve => setTimeout(resolve, pollInterval))
+
+                    const { data: pollData, error: pollError } = await api.pollSkipTraceJob(activeTraceId)
+
+                    if (pollError) {
+                        console.error('Poll error:', pollError)
+                        setSkipTraceStatus('Error checking skip trace status')
+                        break
+                    }
+
+                    if (pollData) {
+                        if (pollData.status === 'completed') {
+                            totalContacts += pollData.contactsFound || 0
+                            setSkipTraceStatus('Skip trace complete!')
+                            break
+                        } else if (pollData.status === 'error') {
+                            setSkipTraceStatus(`Skip trace error: ${pollData.message}`)
+                            break
+                        } else {
+                            setSkipTraceStatus(`Processing skip trace... (${pollData.status})`)
+                        }
+                    }
+                }
+
+                if (Date.now() - startTime >= maxPollTime) {
+                    setSkipTraceStatus('Skip trace is still processing. Results will appear shortly.')
+                }
+            } else {
+                setSkipTraceStatus('Skip trace complete!')
+            }
+
+            setSkipTraceResult({
+                contactsFound: totalContacts,
+                titanSkipCount: totalTitanSkip,
+                batchDataProcessed: totalBatchData,
+                message: `Found contacts via TitanSkip (${totalTitanSkip} leads) and BatchData (${totalBatchData} leads)`,
+            })
+        } catch (err: any) {
+            console.error('Skip trace error:', err)
+            setSkipTraceStatus(`Skip trace failed: ${err.message || 'Unknown error'}`)
+        }
+
+        setSkipTracing(false)
+        onImportComplete() // Refresh leads again to show contacts
+    }
+
     const resetModal = () => {
         setStep('upload')
         setFile(null)
@@ -537,6 +753,9 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
         setColumnMappings({})
         setProgress(0)
         setResult(null)
+        setSkipTracing(false)
+        setSkipTraceStatus('')
+        setSkipTraceResult(null)
         if (fileInputRef.current) {
             fileInputRef.current.value = ''
         }
@@ -641,10 +860,18 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
                                 <Button
                                     onClick={handleImport}
                                     disabled={!addressMapped}
+                                    variant="outline"
                                     className="flex-1"
                                 >
                                     Import {rawRows.length} Properties
-                                    <ArrowRight className="ml-2 h-4 w-4" />
+                                </Button>
+                                <Button
+                                    onClick={handleImportAndSkipTrace}
+                                    disabled={!addressMapped}
+                                    className="flex-1"
+                                >
+                                    <Search className="mr-2 h-4 w-4" />
+                                    Import & Skip Trace
                                 </Button>
                             </div>
 
@@ -838,7 +1065,7 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
                     {/* ─── STEP 3: IMPORTING / RESULTS ─── */}
                     {step === 'importing' && (
                         <>
-                            {/* Progress Bar */}
+                            {/* Import Progress Bar */}
                             {importing && (
                                 <div className="space-y-2">
                                     <div className="flex items-center justify-between text-sm">
@@ -854,7 +1081,7 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
                                 </div>
                             )}
 
-                            {/* Results */}
+                            {/* Import Results */}
                             {result && (
                                 <div className="space-y-2 text-sm">
                                     <div className="flex items-center gap-2 text-green-600">
@@ -878,10 +1105,54 @@ export function CsvUploadModal({ onImportComplete }: CsvUploadModalProps) {
                                             Error: {result.errorDetails}
                                         </div>
                                     )}
-                                    <Button onClick={() => setOpen(false)} className="w-full mt-2">
-                                        Done
-                                    </Button>
                                 </div>
+                            )}
+
+                            {/* Skip Trace Progress */}
+                            {(skipTracing || skipTraceStatus) && (
+                                <div className="border-t pt-3 mt-3 space-y-2">
+                                    <div className="flex items-center gap-2 text-sm">
+                                        {skipTracing ? (
+                                            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                                        ) : skipTraceStatus.includes('complete') ? (
+                                            <CheckCircle className="h-4 w-4 text-green-600" />
+                                        ) : skipTraceStatus.includes('error') || skipTraceStatus.includes('failed') ? (
+                                            <XCircle className="h-4 w-4 text-red-600" />
+                                        ) : (
+                                            <Search className="h-4 w-4 text-muted-foreground" />
+                                        )}
+                                        <span className={
+                                            skipTraceStatus.includes('error') || skipTraceStatus.includes('failed')
+                                                ? 'text-red-600'
+                                                : skipTraceStatus.includes('complete')
+                                                    ? 'text-green-600'
+                                                    : ''
+                                        }>
+                                            {skipTraceStatus}
+                                        </span>
+                                    </div>
+
+                                    {skipTraceResult && (
+                                        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-xs space-y-1">
+                                            {skipTraceResult.titanSkipCount !== undefined && skipTraceResult.titanSkipCount > 0 && (
+                                                <p>TitanSkip: {skipTraceResult.titanSkipCount} leads processed</p>
+                                            )}
+                                            {skipTraceResult.batchDataProcessed !== undefined && skipTraceResult.batchDataProcessed > 0 && (
+                                                <p>BatchData: {skipTraceResult.batchDataProcessed} leads processed</p>
+                                            )}
+                                            {skipTraceResult.contactsFound !== undefined && skipTraceResult.contactsFound > 0 && (
+                                                <p className="font-medium">Contacts found: {skipTraceResult.contactsFound}</p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Done Button — only show when both import and skip trace are done */}
+                            {result && !importing && !skipTracing && (
+                                <Button onClick={() => setOpen(false)} className="w-full mt-2">
+                                    Done
+                                </Button>
                             )}
                         </>
                     )}

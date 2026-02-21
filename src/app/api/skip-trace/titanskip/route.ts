@@ -11,6 +11,7 @@ import {
 
 const BatchSkipTraceSchema = z.object({
   propertyIds: z.array(z.string().uuid()).min(1).max(500),
+  force: z.boolean().optional(), // When true, delete existing contacts and re-fetch
 })
 
 /**
@@ -28,13 +29,13 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
       return Errors.badRequest('Provide an array of propertyIds (1-500).')
     }
 
-    const { propertyIds } = parsed.data
+    const { propertyIds, force } = parsed.data
     const supabase = createAdminClient()
 
     // Fetch all properties
     const { data: properties, error: fetchError } = await supabase
       .from('properties')
-      .select('id, address, city, state, zip, owner_name, raw_realestate_data')
+      .select('id, address, city, state, zip, owner_name, owner_first_name, owner_last_name, mailing_address, mailing_city, mailing_state, raw_realestate_data')
       .in('id', propertyIds)
 
     if (fetchError || !properties) {
@@ -42,33 +43,45 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
       return Errors.internal('Failed to fetch properties')
     }
 
-    // Filter out properties that already have contacts (unless user wants to force)
-    const { data: existingContacts } = await supabase
-      .from('contacts')
-      .select('property_id')
-      .in('property_id', propertyIds)
+    let propertiesNeedingTrace = properties
 
-    const propertiesWithContacts = new Set(
-      (existingContacts || []).map((c) => c.property_id)
-    )
+    if (force) {
+      // Force mode: delete all existing contacts for these properties, then re-trace all
+      await supabase.from('contacts').delete().in('property_id', propertyIds)
+      console.log(`Force skip trace: deleted existing contacts for ${propertyIds.length} properties`)
+    } else {
+      // Default: filter out properties that already have contacts
+      const { data: existingContacts } = await supabase
+        .from('contacts')
+        .select('property_id')
+        .in('property_id', propertyIds)
 
-    const propertiesNeedingTrace = properties.filter(
-      (p) => !propertiesWithContacts.has(p.id)
-    )
+      const propertiesWithContacts = new Set(
+        (existingContacts || []).map((c) => c.property_id)
+      )
 
-    if (propertiesNeedingTrace.length === 0) {
-      return apiSuccess({
-        message: 'All selected leads already have contacts',
-        titanSkipCount: 0,
-        batchDataCount: 0,
-        skippedCount: properties.length,
-      })
+      propertiesNeedingTrace = properties.filter(
+        (p) => !propertiesWithContacts.has(p.id)
+      )
+
+      if (propertiesNeedingTrace.length === 0) {
+        return apiSuccess({
+          message: 'All selected leads already have contacts',
+          traceId: null,
+          titanSkipCount: 0,
+          batchDataCount: 0,
+          batchDataProcessed: 0,
+          skippedCount: properties.length,
+        })
+      }
     }
 
     // Split into TitanSkip-compatible and BatchData groups
     const titanSkipLeads = propertiesNeedingTrace.filter((p) =>
       isTitanSkipCompatible({
         owner_name: p.owner_name,
+        owner_first_name: p.owner_first_name,
+        owner_last_name: p.owner_last_name,
         address: p.address,
         city: p.city,
         state: p.state,
@@ -87,9 +100,14 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
       const csv = buildTitanSkipCsv(
         titanSkipLeads.map((p) => ({
           owner_name: p.owner_name,
+          owner_first_name: p.owner_first_name,
+          owner_last_name: p.owner_last_name,
           address: p.address,
           city: p.city,
           state: p.state,
+          mailing_address: p.mailing_address,
+          mailing_city: p.mailing_city,
+          mailing_state: p.mailing_state,
           raw_realestate_data: p.raw_realestate_data,
         }))
       )
@@ -179,12 +197,14 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
 
     console.log(`Batch skip trace: ${titanSkipCount} via TitanSkip, ${batchDataProcessed}/${batchDataCount} via BatchData`)
 
+    const skippedCount = properties.length - propertiesNeedingTrace.length
+
     return apiSuccess({
       traceId,
       titanSkipCount,
       batchDataCount,
       batchDataProcessed,
-      skippedCount: propertiesWithContacts.size,
+      skippedCount,
       message: traceId
         ? `Processing ${titanSkipCount} leads via TitanSkip, ${batchDataProcessed} via BatchData`
         : `Processed ${batchDataProcessed} leads via BatchData`,

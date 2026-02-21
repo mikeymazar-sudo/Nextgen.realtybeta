@@ -149,6 +149,31 @@ class ApiClient {
     })
   }
 
+  // Batch Skip Trace
+  async batchSkipTrace(propertyIds: string[], force?: boolean) {
+    return this.request<{
+      traceId: string | null
+      titanSkipCount: number
+      batchDataCount: number
+      batchDataProcessed: number
+      skippedCount: number
+      message: string
+    }>('/api/skip-trace/titanskip', {
+      method: 'POST',
+      body: JSON.stringify({ propertyIds, force }),
+    })
+  }
+
+  async pollSkipTraceJob(traceId: string) {
+    return this.request<{
+      status: string
+      traceId: string
+      contactsFound?: number
+      totalRows?: number
+      message: string
+    }>(`/api/skip-trace/titanskip/${traceId}`)
+  }
+
   // Voice
   async getVoiceToken() {
     return this.request<{ token: string; identity: string }>('/api/voice/token')
