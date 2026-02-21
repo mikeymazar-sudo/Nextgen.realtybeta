@@ -19,7 +19,7 @@ interface KanbanColumnProps {
 const columnColors: Record<string, string> = {
     new: 'bg-blue-500',
     warm: 'bg-orange-500',
-    reach_out: 'bg-purple-500',
+    follow_up: 'bg-purple-500',
     closed: 'bg-green-500',
 }
 
@@ -59,8 +59,8 @@ export function KanbanColumn({
             <div
                 ref={setNodeRef}
                 className={`min-h-[500px] p-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/50 border-2 border-dashed transition-colors ${isOver
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                        : 'border-transparent'
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-transparent'
                     }`}
             >
                 <SortableContext items={sortedLeads.map(l => l.id)} strategy={verticalListSortingStrategy}>

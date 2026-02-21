@@ -31,18 +31,34 @@ export default function LeadsPage() {
     setLoading(true)
     const supabase = createClient()
 
-    const { data, error } = await supabase
-      .from('properties')
-      .select(`
-        *,
-        list:lead_lists(id, name)
-      `)
-      .eq('created_by', user.id)
-      .order('follow_up_date', { ascending: true, nullsFirst: false })
+    // Supabase caps queries at 1,000 rows by default.
+    // Paginate through all leads so accounts with >1,000 leads see everything.
+    const PAGE_SIZE = 1000
+    let allData: Property[] = []
+    let from = 0
+    let hasMore = true
 
-    if (!error && data) {
-      setProperties(data as Property[])
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('properties')
+        .select(`
+          *,
+          list:lead_lists(id, name)
+        `)
+        .eq('created_by', user.id)
+        .order('follow_up_date', { ascending: true, nullsFirst: false })
+        .range(from, from + PAGE_SIZE - 1)
+
+      if (error || !data) {
+        hasMore = false
+      } else {
+        allData = allData.concat(data as Property[])
+        hasMore = data.length === PAGE_SIZE
+        from += PAGE_SIZE
+      }
     }
+
+    setProperties(allData)
     setLoading(false)
   }, [user])
 
@@ -109,7 +125,7 @@ export default function LeadsPage() {
     return {
       new: filteredProperties.filter((p) => p.status === 'new').length,
       warm: filteredProperties.filter((p) => p.status === 'warm').length,
-      reach_out: filteredProperties.filter((p) => p.status === 'reach_out').length,
+      follow_up: filteredProperties.filter((p) => p.status === 'follow_up').length,
       closed: filteredProperties.filter((p) => p.status === 'closed').length,
     }
   }, [filteredProperties])

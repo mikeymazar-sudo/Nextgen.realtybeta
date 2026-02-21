@@ -13,7 +13,7 @@ import type { Property } from '@/types/schema'
 const statusColors: Record<string, string> = {
   new: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
   warm: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
-  reach_out: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
+  follow_up: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
   closed: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
 }
 

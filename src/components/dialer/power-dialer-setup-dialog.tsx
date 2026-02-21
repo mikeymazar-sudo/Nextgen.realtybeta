@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { Loader2, Zap, MessageSquare, RefreshCcw, Pencil } from 'lucide-react'
+import { Loader2, Zap, MessageSquare, RefreshCcw, Pencil, PhoneMissed } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/providers/auth-provider'
 import { loadSmsTemplates, resolveTemplate } from '@/hooks/use-power-dialer'
@@ -96,9 +96,12 @@ export function PowerDialerSetupDialog({
         .from('properties')
         .select('id', { count: 'exact', head: true })
         .eq('created_by', user.id)
+        .eq('has_been_answered', false)
 
       if (listId === 'all_new') {
         query = query.eq('status', 'new')
+      } else if (listId === 'unanswered') {
+        query = query.gt('unanswered_count', 0)
       } else {
         query = query.eq('list_id', listId)
       }
@@ -115,7 +118,8 @@ export function PowerDialerSetupDialog({
     if (leadCount === 0) return
     setLoading(true)
     onStart({
-      listId: listId === 'all_new' ? null : listId,
+      listId: listId === 'all_new' || listId === 'unanswered' ? null : listId,
+      leadFilter: listId === 'unanswered' ? 'unanswered' : 'new',
       doubleDial,
       preSms,
       smsTemplateIndex,
@@ -143,6 +147,12 @@ export function PowerDialerSetupDialog({
               <SelectContent>
                 <SelectItem value="all_new">
                   All New Leads
+                </SelectItem>
+                <SelectItem value="unanswered">
+                  <span className="flex items-center gap-2">
+                    <PhoneMissed className="h-3.5 w-3.5 text-red-500" />
+                    Unanswered Leads
+                  </span>
                 </SelectItem>
                 {lists.map((list) => (
                   <SelectItem key={list.id} value={list.id}>
@@ -218,11 +228,10 @@ export function PowerDialerSetupDialog({
                   <button
                     key={idx}
                     onClick={() => setSmsTemplateIndex(idx)}
-                    className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors ${
-                      smsTemplateIndex === idx
+                    className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors ${smsTemplateIndex === idx
                         ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-700'
                         : 'border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-2 mb-1">
                       <Badge

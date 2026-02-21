@@ -11,8 +11,15 @@ import {
     DialogTitle,
     DialogFooter,
 } from '@/components/ui/dialog'
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover'
+import { Calendar } from '@/components/ui/calendar'
 import { Textarea } from '@/components/ui/textarea'
-import { Phone, PhoneOff, Mic, MicOff, Delete, Loader2, ChevronDown, ChevronUp, User, Zap } from 'lucide-react'
+import { Phone, PhoneOff, Mic, MicOff, Delete, Loader2, ChevronDown, ChevronUp, User, Zap, CalendarIcon } from 'lucide-react'
+import { format } from 'date-fns'
 import { useAuth } from '@/providers/auth-provider'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api/client'
@@ -48,6 +55,9 @@ export function DialerSidebarWidget() {
     const [propertyId, setPropertyId] = useState<string | null>(null)
     // Track which tag was last clicked for power dialer disposition
     const [lastTag, setLastTag] = useState<string | null>(null)
+    const [followUpDate, setFollowUpDate] = useState<Date | undefined>(undefined)
+    // Track if the current manual call was answered (went to 'live' state)
+    const manualCallAnsweredRef = useRef(false)
     const autoCallProcessedRef = useRef<string | null>(null)
     const { user } = useAuth()
 
@@ -189,10 +199,63 @@ export function DialerSidebarWidget() {
         }
     }, [pendingAutoCall, deviceReady, callState, number, propertyId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Open notes modal when call ends (manual mode only)
+    // Track when manual call goes live (answered)
+    useEffect(() => {
+        if (callState === 'live' && !isPowerDialerActive) {
+            manualCallAnsweredRef.current = true
+        }
+    }, [callState, isPowerDialerActive])
+
+    // When manual call ends: show notes if answered, track unanswered if not
     useEffect(() => {
         if (callState === 'ended' && currentCallId && !isPowerDialerActive) {
-            setShowNotesModal(true)
+            if (manualCallAnsweredRef.current) {
+                // Call was answered → show notes modal
+                setShowNotesModal(true)
+                // Mark lead as answered and move to follow_up
+                const pid = propertyId
+                if (pid) {
+                    const supabase = createClient()
+                    supabase
+                        .from('properties')
+                        .update({
+                            has_been_answered: true,
+                            status: 'follow_up',
+                            status_changed_at: new Date().toISOString(),
+                            last_called_at: new Date().toISOString(),
+                        })
+                        .eq('id', pid)
+                        .then()
+                }
+            } else {
+                // Call was unanswered → silently mark as unanswered
+                const pid = propertyId
+                if (pid) {
+                    const supabase = createClient()
+                    supabase.rpc('increment_unanswered', { prop_id: pid }).then(({ error }) => {
+                        if (error) {
+                            // Fallback: do a manual update
+                            supabase
+                                .from('properties')
+                                .select('unanswered_count')
+                                .eq('id', pid)
+                                .single()
+                                .then(({ data }) => {
+                                    const count = (data?.unanswered_count || 0) + 1
+                                    supabase
+                                        .from('properties')
+                                        .update({
+                                            unanswered_count: count,
+                                            last_called_at: new Date().toISOString(),
+                                        })
+                                        .eq('id', pid)
+                                        .then()
+                                })
+                        }
+                    })
+                }
+                resetCall()
+            }
         }
     }, [callState, currentCallId, isPowerDialerActive])
 
@@ -280,8 +343,24 @@ export function DialerSidebarWidget() {
                     toast.success('Call notes saved')
                 }
             }
+            // Move power dialer lead to follow_up + save follow-up date
+            const lead = powerDialer.currentLead
+            if (lead) {
+                const supabase = createClient()
+                await supabase
+                    .from('properties')
+                    .update({
+                        has_been_answered: true,
+                        status: 'follow_up',
+                        status_changed_at: new Date().toISOString(),
+                        last_called_at: new Date().toISOString(),
+                        follow_up_date: followUpDate ? format(followUpDate, 'yyyy-MM-dd') : null,
+                    })
+                    .eq('id', lead.propertyId)
+            }
             setShowNotesModal(false)
             setCallNotes('')
+            setFollowUpDate(undefined)
             setCurrentCallId(null)
             // Record the disposition tag without advancing, then wait for user to press Continue
             if (lastTag) {
@@ -309,18 +388,46 @@ export function DialerSidebarWidget() {
             toast.success('Call notes saved')
         }
 
+        // Save follow-up date if set
+        if (propertyId) {
+            const supabase = createClient()
+            await supabase
+                .from('properties')
+                .update({
+                    follow_up_date: followUpDate ? format(followUpDate, 'yyyy-MM-dd') : null,
+                })
+                .eq('id', propertyId)
+        }
+
         setShowNotesModal(false)
+        setFollowUpDate(undefined)
         resetCall()
     }
 
-    const skipNotesModal = () => {
+    const skipNotesModal = async () => {
         setShowNotesModal(false)
         if (isPowerDialerActive) {
+            // Even on skip, move answered lead to follow_up
+            const lead = powerDialer.currentLead
+            if (lead) {
+                const supabase = createClient()
+                await supabase
+                    .from('properties')
+                    .update({
+                        has_been_answered: true,
+                        status: 'follow_up',
+                        status_changed_at: new Date().toISOString(),
+                        last_called_at: new Date().toISOString(),
+                    })
+                    .eq('id', lead.propertyId)
+            }
             setCallNotes('')
+            setFollowUpDate(undefined)
             setCurrentCallId(null)
             powerDialer.advanceToNext(lastTag || undefined)
             setLastTag(null)
         } else {
+            setFollowUpDate(undefined)
             resetCall()
         }
     }
@@ -334,6 +441,8 @@ export function DialerSidebarWidget() {
         setPropertyAddress(null)
         setPropertyId(null)
         setLastTag(null)
+        setFollowUpDate(undefined)
+        manualCallAnsweredRef.current = false
         autoCallProcessedRef.current = null
     }
 
@@ -625,6 +734,41 @@ export function DialerSidebarWidget() {
                                     {tag}
                                 </Button>
                             ))}
+                        </div>
+                        {/* Follow-Up Date Picker */}
+                        <div className="flex items-center gap-3 p-3 rounded-lg border bg-zinc-50/50 dark:bg-zinc-800/30">
+                            <CalendarIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <div className="flex-1">
+                                <p className="text-sm font-medium">Set Follow-Up</p>
+                                <p className="text-xs text-muted-foreground">Schedule a date to follow up with this lead</p>
+                            </div>
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button variant="outline" size="sm" className="h-8 gap-2">
+                                        <CalendarIcon className="h-3.5 w-3.5" />
+                                        {followUpDate ? format(followUpDate, 'MMM d, yyyy') : 'Pick date'}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-0" align="end">
+                                    <Calendar
+                                        mode="single"
+                                        selected={followUpDate}
+                                        onSelect={setFollowUpDate}
+                                        disabled={(date) => date < new Date()}
+                                        initialFocus
+                                    />
+                                </PopoverContent>
+                            </Popover>
+                            {followUpDate && (
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 px-2 text-xs text-muted-foreground"
+                                    onClick={() => setFollowUpDate(undefined)}
+                                >
+                                    Clear
+                                </Button>
+                            )}
                         </div>
                     </div>
                     <DialogFooter>

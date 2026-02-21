@@ -17,6 +17,7 @@ import { Calendar } from '@/components/ui/calendar'
 import {
     GripVertical,
     Phone,
+    PhoneMissed,
     StickyNote,
     Calendar as CalendarIcon,
     Flag,
@@ -165,10 +166,10 @@ export function LeadCard({ property, isSelected, onSelect, onUpdate }: LeadCardP
                             <Badge
                                 variant="secondary"
                                 className={`text-xs px-1.5 py-0 ${isOverdue
-                                        ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                                        : isDueToday
-                                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                                            : ''
+                                    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                                    : isDueToday
+                                        ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                                        : ''
                                     }`}
                             >
                                 <CalendarIcon className="h-3 w-3 mr-1" />
@@ -181,6 +182,17 @@ export function LeadCard({ property, isSelected, onSelect, onUpdate }: LeadCardP
                             <span className="text-xs text-muted-foreground">
                                 ${property.list_price.toLocaleString()}
                             </span>
+                        )}
+
+                        {/* Unanswered Badge */}
+                        {property.unanswered_count > 0 && !property.has_been_answered && (
+                            <Badge
+                                variant="secondary"
+                                className="text-xs px-1.5 py-0 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                            >
+                                <PhoneMissed className="h-3 w-3 mr-1" />
+                                Unanswered ×{property.unanswered_count}
+                            </Badge>
                         )}
                     </div>
                 </div>

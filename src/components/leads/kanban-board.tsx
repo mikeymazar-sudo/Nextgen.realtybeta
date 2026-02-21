@@ -29,7 +29,7 @@ interface KanbanBoardProps {
 const COLUMNS = [
     { id: 'new', title: 'New', color: 'bg-blue-500' },
     { id: 'warm', title: 'Warm', color: 'bg-orange-500' },
-    { id: 'reach_out', title: 'Reach Out', color: 'bg-purple-500' },
+    { id: 'follow_up', title: 'Follow Up', color: 'bg-purple-500' },
     { id: 'closed', title: 'Closed', color: 'bg-green-500' },
 ] as const
 
@@ -54,7 +54,7 @@ export function KanbanBoard({ leads, selectedIds, onSelect, onUpdate }: KanbanBo
         return leads.filter((lead) => {
             // Leads with a follow_up_date should appear in the Reach Out column
             if (lead.follow_up_date) {
-                return status === 'reach_out'
+                return status === 'follow_up'
             }
             // Otherwise, filter by actual status
             return lead.status === status

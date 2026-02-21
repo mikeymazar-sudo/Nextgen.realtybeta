@@ -28,7 +28,7 @@ export interface Property {
   year_built: number | null
   lot_size: number | null
   property_type: string | null
-  status: 'new' | 'warm' | 'reach_out' | 'closed'
+  status: 'new' | 'warm' | 'follow_up' | 'closed'
   owner_name: string | null
   owner_first_name: string | null
   owner_last_name: string | null
@@ -53,6 +53,9 @@ export interface Property {
   list_id: string | null
   list?: LeadList
   raw_realestate_data?: Record<string, any> | null
+  unanswered_count: number
+  last_called_at: string | null
+  has_been_answered: boolean
 }
 
 export interface LeadList {
@@ -241,6 +244,7 @@ export interface PowerDialerLead {
 
 export interface PowerDialerSettings {
   listId: string | null // null = "All New Leads"
+  leadFilter: 'new' | 'unanswered' // which leads to dial
   doubleDial: boolean
   preSms: boolean
   smsTemplateIndex: number

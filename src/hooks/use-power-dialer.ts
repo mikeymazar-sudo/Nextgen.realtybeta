@@ -141,7 +141,7 @@ const initialState: PowerDialerState = {
   mode: 'IDLE',
   queue: [],
   currentIndex: 0,
-  settings: { listId: null, doubleDial: false, preSms: false, smsTemplateIndex: 0 },
+  settings: { listId: null, leadFilter: 'new' as const, doubleDial: false, preSms: false, smsTemplateIndex: 0 },
   dialAttempt: 1,
   smsStatus: 'idle',
   showSetupDialog: false,
@@ -389,9 +389,13 @@ export function usePowerDialer({
           contacts:contacts(id, phone_numbers)
         `)
         .eq('created_by', userId)
+        .eq('has_been_answered', false)
 
       if (settings.listId) {
         query = query.eq('list_id', settings.listId)
+      } else if (settings.leadFilter === 'unanswered') {
+        // Unanswered leads: has been called at least once but never answered
+        query = query.gt('unanswered_count', 0)
       } else {
         // "All New Leads" = status is 'new'
         query = query.eq('status', 'new')
@@ -560,6 +564,21 @@ export function usePowerDialer({
       if (wasAnswered) {
         // Call was answered — show disposition modal
         dispatch({ type: 'DISPOSITION' })
+        // Mark lead as answered in the DB
+        const lead = s.queue[s.currentIndex]
+        if (lead) {
+          const supabase = createClient()
+          supabase
+            .from('properties')
+            .update({
+              has_been_answered: true,
+              status: 'follow_up',
+              status_changed_at: new Date().toISOString(),
+              last_called_at: new Date().toISOString(),
+            })
+            .eq('id', lead.propertyId)
+            .then()
+        }
       } else if (s.settings.doubleDial && s.dialAttempt === 1) {
         // First attempt unanswered with double dial → redial after 2 seconds
         dispatch({ type: 'CALL_ENDED_UNANSWERED' })
@@ -571,12 +590,57 @@ export function usePowerDialer({
             } catch {
               toast.error('Redial failed')
               dispatch({ type: 'AUTO_ADVANCE_NO_ANSWER' })
+              // Track unanswered in DB
+              const failedLead = stateRef.current.queue[stateRef.current.currentIndex]
+              if (failedLead) {
+                const sb = createClient()
+                sb.rpc('increment_unanswered', { prop_id: failedLead.propertyId }).then(({ error: rpcErr }) => {
+                  if (rpcErr) {
+                    sb.from('properties')
+                      .select('unanswered_count')
+                      .eq('id', failedLead.propertyId)
+                      .single()
+                      .then(({ data: d }) => {
+                        sb.from('properties')
+                          .update({ unanswered_count: (d?.unanswered_count || 0) + 1, last_called_at: new Date().toISOString() })
+                          .eq('id', failedLead.propertyId)
+                          .then()
+                      })
+                  }
+                })
+              }
             }
           }
         }, 2000)
       } else {
         // Unanswered (no double dial, or second attempt failed) → auto-advance silently
         dispatch({ type: 'AUTO_ADVANCE_NO_ANSWER' })
+        // Track unanswered in DB
+        const lead = s.queue[s.currentIndex]
+        if (lead) {
+          const supabase = createClient()
+          supabase.rpc('increment_unanswered', { prop_id: lead.propertyId }).then(({ error }) => {
+            if (error) {
+              // Fallback: manual update
+              supabase
+                .from('properties')
+                .select('unanswered_count')
+                .eq('id', lead.propertyId)
+                .single()
+                .then(({ data }) => {
+                  const count = (data?.unanswered_count || 0) + 1
+                  supabase
+                    .from('properties')
+                    .update({
+                      unanswered_count: count,
+                      last_called_at: new Date().toISOString(),
+                    })
+                    .eq('id', lead.propertyId)
+                    .then()
+                })
+            }
+          })
+        }
       }
     }
   }, [callState, makeCall, router])
