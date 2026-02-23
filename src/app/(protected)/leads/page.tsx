@@ -124,6 +124,7 @@ export default function LeadsPage() {
   const totalByStatus = useMemo(() => {
     return {
       new: filteredProperties.filter((p) => p.status === 'new').length,
+      contacted: filteredProperties.filter((p) => p.status === 'contacted').length,
       warm: filteredProperties.filter((p) => p.status === 'warm').length,
       follow_up: filteredProperties.filter((p) => p.status === 'follow_up').length,
       closed: filteredProperties.filter((p) => p.status === 'closed').length,
@@ -157,7 +158,7 @@ export default function LeadsPage() {
       {/* Kanban Board */}
       {loading ? (
         <div className="flex gap-4">
-          {[...Array(4)].map((_, i) => (
+          {[...Array(5)].map((_, i) => (
             <div key={i} className="w-80 flex-shrink-0">
               <Skeleton className="h-8 w-24 mb-3" />
               <Skeleton className="h-[500px] rounded-lg" />

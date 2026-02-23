@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Phone, PhoneMissed } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { DealAnalysisCard } from '@/components/leads/deal-analysis'
@@ -152,14 +152,29 @@ export default function PropertyDetailPage() {
 
     return (
         <div className="space-y-6">
-            {/* Back button */}
-            <Link
-                href="/leads"
-                className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-                <ArrowLeft className="h-4 w-4" />
-                Back to Leads
-            </Link>
+            {/* Back button + contact status */}
+            <div className="flex items-center justify-between">
+                <Link
+                    href="/leads"
+                    className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                    <ArrowLeft className="h-4 w-4" />
+                    Back to Leads
+                </Link>
+
+                {/* Contact status badge */}
+                {property.has_been_answered ? (
+                    <Badge className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0">
+                        <Phone className="h-3 w-3 mr-1" />
+                        Contacted
+                    </Badge>
+                ) : property.unanswered_count > 0 ? (
+                    <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-0">
+                        <PhoneMissed className="h-3 w-3 mr-1" />
+                        Unanswered ×{property.unanswered_count}
+                    </Badge>
+                ) : null}
+            </div>
 
             {/* Two column layout for owner/comps/analysis */}
             <div className="grid lg:grid-cols-5 gap-6">

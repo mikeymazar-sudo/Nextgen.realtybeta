@@ -32,6 +32,7 @@ interface BulkActionsBarProps {
 
 const STATUSES = [
     { value: 'new', label: 'New' },
+    { value: 'contacted', label: 'Contacted' },
     { value: 'warm', label: 'Warm' },
     { value: 'follow_up', label: 'Follow Up' },
     { value: 'closed', label: 'Closed' },

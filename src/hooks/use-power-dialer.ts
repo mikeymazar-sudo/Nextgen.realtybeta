@@ -656,7 +656,7 @@ export function usePowerDialer({
             .from('properties')
             .update({
               has_been_answered: true,
-              status: 'follow_up',
+              status: 'contacted',
               status_changed_at: new Date().toISOString(),
               last_called_at: new Date().toISOString(),
             })
@@ -691,12 +691,20 @@ export function usePowerDialer({
                 sb.rpc('increment_unanswered', { prop_id: failedLead.propertyId }).then(({ error: rpcErr }) => {
                   if (rpcErr) {
                     sb.from('properties')
-                      .select('unanswered_count')
+                      .select('unanswered_count, status')
                       .eq('id', failedLead.propertyId)
                       .single()
                       .then(({ data: d }) => {
+                        const updates: Record<string, unknown> = {
+                          unanswered_count: (d?.unanswered_count || 0) + 1,
+                          last_called_at: new Date().toISOString(),
+                        }
+                        if (d?.status === 'new') {
+                          updates.status = 'contacted'
+                          updates.status_changed_at = new Date().toISOString()
+                        }
                         sb.from('properties')
-                          .update({ unanswered_count: (d?.unanswered_count || 0) + 1, last_called_at: new Date().toISOString() })
+                          .update(updates)
                           .eq('id', failedLead.propertyId)
                           .then()
                       })
@@ -728,17 +736,22 @@ export function usePowerDialer({
               // Fallback: manual update
               supabase
                 .from('properties')
-                .select('unanswered_count')
+                .select('unanswered_count, status')
                 .eq('id', lead.propertyId)
                 .single()
                 .then(({ data }) => {
                   const count = (data?.unanswered_count || 0) + 1
+                  const updates: Record<string, unknown> = {
+                    unanswered_count: count,
+                    last_called_at: new Date().toISOString(),
+                  }
+                  if (data?.status === 'new') {
+                    updates.status = 'contacted'
+                    updates.status_changed_at = new Date().toISOString()
+                  }
                   supabase
                     .from('properties')
-                    .update({
-                      unanswered_count: count,
-                      last_called_at: new Date().toISOString(),
-                    })
+                    .update(updates)
                     .eq('id', lead.propertyId)
                     .then()
                 })

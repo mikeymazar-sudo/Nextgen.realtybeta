@@ -212,7 +212,7 @@ export function DialerSidebarWidget() {
             if (manualCallAnsweredRef.current) {
                 // Call was answered → show notes modal
                 setShowNotesModal(true)
-                // Mark lead as answered and move to follow_up
+                // Mark lead as answered and move to contacted
                 const pid = propertyId
                 if (pid) {
                     const supabase = createClient()
@@ -220,7 +220,7 @@ export function DialerSidebarWidget() {
                         .from('properties')
                         .update({
                             has_been_answered: true,
-                            status: 'follow_up',
+                            status: 'contacted',
                             status_changed_at: new Date().toISOString(),
                             last_called_at: new Date().toISOString(),
                         })
@@ -237,17 +237,22 @@ export function DialerSidebarWidget() {
                             // Fallback: do a manual update
                             supabase
                                 .from('properties')
-                                .select('unanswered_count')
+                                .select('unanswered_count, status')
                                 .eq('id', pid)
                                 .single()
                                 .then(({ data }) => {
                                     const count = (data?.unanswered_count || 0) + 1
+                                    const updates: Record<string, unknown> = {
+                                        unanswered_count: count,
+                                        last_called_at: new Date().toISOString(),
+                                    }
+                                    if (data?.status === 'new') {
+                                        updates.status = 'contacted'
+                                        updates.status_changed_at = new Date().toISOString()
+                                    }
                                     supabase
                                         .from('properties')
-                                        .update({
-                                            unanswered_count: count,
-                                            last_called_at: new Date().toISOString(),
-                                        })
+                                        .update(updates)
                                         .eq('id', pid)
                                         .then()
                                 })

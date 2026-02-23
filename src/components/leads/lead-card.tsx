@@ -184,6 +184,17 @@ export function LeadCard({ property, isSelected, onSelect, onUpdate }: LeadCardP
                             </span>
                         )}
 
+                        {/* Contacted Badge */}
+                        {property.has_been_answered && (
+                            <Badge
+                                variant="secondary"
+                                className="text-xs px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                            >
+                                <Phone className="h-3 w-3 mr-1" />
+                                Contacted
+                            </Badge>
+                        )}
+
                         {/* Unanswered Badge */}
                         {property.unanswered_count > 0 && !property.has_been_answered && (
                             <Badge
