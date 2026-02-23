@@ -575,13 +575,13 @@ export function usePowerDialer({
       return
     }
 
-    // Call is ringing → start 15s no-answer timer
+    // Call is ringing → start 25s no-answer timer
     if (callState === 'ringing' && prevCallState !== 'ringing' && (s.mode === 'DIALING' || s.mode === 'REDIALING')) {
       if (noAnswerTimeoutRef.current) clearTimeout(noAnswerTimeoutRef.current)
       noAnswerTimeoutRef.current = setTimeout(() => {
-        // Auto-hangup after 15 seconds of ringing
+        // Auto-hangup after 25 seconds of ringing
         hangUpRef.current()
-      }, 15000)
+      }, 25000)
     }
 
     // Call connected → cancel ring timer, navigate to lead page
@@ -713,7 +713,7 @@ export function usePowerDialer({
               }
             }
           }
-        }, 2000)
+        }, 8000)
       } else {
         // Unanswered (no double dial, or second attempt failed) → auto-advance silently
         dispatch({ type: 'AUTO_ADVANCE_NO_ANSWER' })

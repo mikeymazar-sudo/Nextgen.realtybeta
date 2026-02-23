@@ -348,7 +348,7 @@ export function DialerSidebarWidget() {
                     toast.success('Call notes saved')
                 }
             }
-            // Move power dialer lead to follow_up + save follow-up date
+            // Move power dialer lead to contacted (only follow_up if user scheduled a follow-up)
             const lead = powerDialer.currentLead
             if (lead) {
                 const supabase = createClient()
@@ -356,7 +356,7 @@ export function DialerSidebarWidget() {
                     .from('properties')
                     .update({
                         has_been_answered: true,
-                        status: 'follow_up',
+                        status: followUpDate ? 'follow_up' : 'contacted',
                         status_changed_at: new Date().toISOString(),
                         last_called_at: new Date().toISOString(),
                         follow_up_date: followUpDate ? format(followUpDate, 'yyyy-MM-dd') : null,
@@ -412,7 +412,7 @@ export function DialerSidebarWidget() {
     const skipNotesModal = async () => {
         setShowNotesModal(false)
         if (isPowerDialerActive) {
-            // Even on skip, move answered lead to follow_up
+            // On skip, move answered lead to contacted
             const lead = powerDialer.currentLead
             if (lead) {
                 const supabase = createClient()
@@ -420,7 +420,7 @@ export function DialerSidebarWidget() {
                     .from('properties')
                     .update({
                         has_been_answered: true,
-                        status: 'follow_up',
+                        status: 'contacted',
                         status_changed_at: new Date().toISOString(),
                         last_called_at: new Date().toISOString(),
                     })

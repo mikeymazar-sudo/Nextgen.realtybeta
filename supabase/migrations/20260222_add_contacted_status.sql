@@ -1,5 +1,27 @@
 -- Add 'contacted' status support and update increment_unanswered to auto-move leads
 
+-- Drop any existing CHECK constraint on status column and add updated one
+DO $$
+DECLARE
+  constraint_name TEXT;
+BEGIN
+  SELECT c.conname INTO constraint_name
+  FROM pg_constraint c
+  JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+  WHERE c.conrelid = 'properties'::regclass
+    AND c.contype = 'c'
+    AND a.attname = 'status';
+
+  IF constraint_name IS NOT NULL THEN
+    EXECUTE 'ALTER TABLE properties DROP CONSTRAINT ' || constraint_name;
+  END IF;
+END $$;
+
+-- Add updated CHECK constraint that includes 'contacted'
+ALTER TABLE properties
+  ADD CONSTRAINT properties_status_check
+  CHECK (status IN ('new', 'contacted', 'warm', 'follow_up', 'closed'));
+
 -- Update the increment_unanswered RPC to also set status = 'contacted' for new leads
 CREATE OR REPLACE FUNCTION increment_unanswered(prop_id uuid)
 RETURNS void AS $$
