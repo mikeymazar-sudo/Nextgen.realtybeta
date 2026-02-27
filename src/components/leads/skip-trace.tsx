@@ -55,7 +55,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import { api } from '@/lib/api-client'
+import { api } from '@/lib/api/client'
 import { createClient } from '@/lib/supabase/client'
 import { EmailComposer } from './email-composer'
 import { format } from 'date-fns'
@@ -66,7 +66,7 @@ import {
   fmtCurrency,
   fmtDate,
   type NormalizedPropertyData,
-} from '@/lib/property-data-utils'
+} from '@/lib/property/data-utils'
 import {
   WholesaleIndicators,
   FinancialOverview,
