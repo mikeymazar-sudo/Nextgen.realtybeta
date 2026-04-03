@@ -131,8 +131,14 @@ export function useTwilio(): UseTwilioReturn {
         tokenRefreshRef.current = null
       }
 
-      const sw = await SignalWire({
-        token,
+      const sw = await SignalWire({ token })
+
+      if (!mountedRef.current) {
+        try { await sw.offline() } catch {}
+        return
+      }
+
+      await sw.online({
         incomingCallHandlers: {
           all: async (notification: any) => {
             console.log('[SignalWire] Incoming call')
@@ -142,13 +148,6 @@ export function useTwilio(): UseTwilioReturn {
           }
         }
       })
-
-      if (!mountedRef.current) {
-        try { await sw.offline() } catch {}
-        return
-      }
-
-      await sw.online()
 
       if (!mountedRef.current) {
         try { await sw.offline() } catch {}

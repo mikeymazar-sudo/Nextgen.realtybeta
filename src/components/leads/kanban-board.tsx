@@ -145,6 +145,7 @@ export function KanbanBoard({ leads, selectedIds, isSelectionMode, onSelect, onU
                         <LeadCard
                             property={activeLead}
                             isSelected={false}
+                            isSelectionMode={false}
                             onSelect={() => { }}
                             onUpdate={() => { }}
                         />
