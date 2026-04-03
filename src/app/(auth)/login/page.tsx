@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useAuth } from '@/providers/auth-provider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,7 +17,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
 
   const { signIn, signUp } = useAuth()
-  const router = useRouter()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -37,8 +35,7 @@ export default function LoginPage() {
           if (signInError) {
             setError('Account created! Please check your email to verify, then sign in.')
           } else {
-            router.refresh()
-            router.push('/dashboard')
+            window.location.href = '/dashboard'
           }
         }
       } else {
@@ -46,8 +43,7 @@ export default function LoginPage() {
         if (signInError) {
           setError(signInError)
         } else {
-          router.refresh()
-          router.push('/dashboard')
+          window.location.href = '/dashboard'
         }
       }
     } catch {
