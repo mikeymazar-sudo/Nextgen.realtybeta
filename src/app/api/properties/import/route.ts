@@ -185,7 +185,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                 const { data, error } = await supabase
                     .from('properties')
                     .upsert(rows, { onConflict: 'address,city,state,zip' })
-                    .select('id');
+                    .select('id, address, city, state, zip');
 
                 if (error) {
                     console.error('Batch insert error:', error.message, error.code, error.details);
@@ -207,10 +207,29 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
 
                     // Create contacts for any properties that have phone/email data in the CSV
                     if (data && data.length > 0) {
+                        // Build address→id map to correctly match CSV rows to property IDs
+                        // regardless of the order Postgres returns upserted rows.
+                        const propertyIdByAddress = new Map<string, string>();
+                        for (const prop of data as any[]) {
+                            const key = [
+                                (prop.address || '').toLowerCase().trim(),
+                                (prop.city || '').toLowerCase().trim(),
+                                (prop.state || '').toLowerCase().trim(),
+                                (prop.zip || '').trim(),
+                            ].join('|');
+                            propertyIdByAddress.set(key, prop.id);
+                        }
+
                         const contactsToInsert: any[] = [];
-                        for (let j = 0; j < data.length; j++) {
-                            const p = batch[j];
-                            const propertyId = data[j].id;
+                        for (const p of batch) {
+                            const addrKey = [
+                                (p.address || '').toLowerCase().trim(),
+                                (p.city || '').toLowerCase().trim(),
+                                (p.state || '').toLowerCase().trim(),
+                                (p.zip || '').trim(),
+                            ].join('|');
+                            const propertyId = propertyIdByAddress.get(addrKey);
+                            if (!propertyId) continue;
 
                             // Collect phones: owner_phone + phone_1/2/3, deduplicated, max 3
                             // Validate: must have 7-15 digits to be a real phone number
@@ -231,18 +250,19 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
 
                             if (uniquePhones.length === 0 && uniqueEmails.length === 0) continue;
 
+                            // Serialize as JSON strings to match the text[] column type
                             contactsToInsert.push({
                                 property_id: propertyId,
                                 name: p.owner_name || null,
-                                phone_numbers: uniquePhones.map((v, i) => ({
+                                phone_numbers: uniquePhones.map((v, idx) => JSON.stringify({
                                     value: v,
                                     label: 'mobile',
-                                    is_primary: i === 0,
+                                    is_primary: idx === 0,
                                 })),
-                                emails: uniqueEmails.map((v, i) => ({
+                                emails: uniqueEmails.map((v, idx) => JSON.stringify({
                                     value: v,
                                     label: 'personal',
-                                    is_primary: i === 0,
+                                    is_primary: idx === 0,
                                 })),
                             });
                         }
@@ -256,7 +276,10 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                             const existingPropIds = new Set((existingContacts || []).map((e: any) => e.property_id))
                             const newContacts = contactsToInsert.filter((c: any) => !existingPropIds.has(c.property_id))
                             if (newContacts.length > 0) {
-                                await supabase.from('contacts').insert(newContacts)
+                                const { error: contactError } = await supabase.from('contacts').insert(newContacts)
+                                if (contactError) {
+                                    console.error('Contact insert error:', contactError.message, contactError.details)
+                                }
                             }
                         }
                     }
