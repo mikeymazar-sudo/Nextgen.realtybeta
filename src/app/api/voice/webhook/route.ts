@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import twilio from 'twilio'
+import { RestClient } from '@signalwire/compatibility-api'
 import { createAdminClient } from '@/lib/supabase/server'
 
 export async function POST(req: NextRequest) {
@@ -10,12 +10,12 @@ export async function POST(req: NextRequest) {
       params[key] = value.toString()
     })
 
-    // Validate Twilio signature in production
+    // Validate SignalWire signature in production
     if (process.env.NODE_ENV === 'production') {
-      const signature = req.headers.get('x-twilio-signature') || ''
+      const signature = req.headers.get('x-signalwire-signature') || ''
       const url = req.url
-      const isValid = twilio.validateRequest(
-        process.env.TWILIO_AUTH_TOKEN!,
+      const isValid = RestClient.validateRequest(
+        process.env.SIGNALWIRE_SIGNING_KEY!,
         signature,
         url,
         params
@@ -33,7 +33,6 @@ export async function POST(req: NextRequest) {
     const callerId = params.Caller?.startsWith('client:') ? params.Caller.replace('client:', '') : null
     const recordingSid = params.RecordingSid
     const recordingUrl = params.RecordingUrl
-    const recordingStatus = params.RecordingStatus
 
     const supabase = createAdminClient()
 
@@ -70,14 +69,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Return empty TwiML response
-    const twiml = new twilio.twiml.VoiceResponse()
+    // Return empty cXML response
+    const twiml = new RestClient.LaML.VoiceResponse()
     return new NextResponse(twiml.toString(), {
       headers: { 'Content-Type': 'text/xml' },
     })
   } catch (error) {
     console.error('Voice webhook error:', error)
-    const twiml = new twilio.twiml.VoiceResponse()
+    const twiml = new RestClient.LaML.VoiceResponse()
     twiml.say('An error occurred. Please try again later.')
     return new NextResponse(twiml.toString(), {
       headers: { 'Content-Type': 'text/xml' },

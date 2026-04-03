@@ -1,14 +1,16 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Device, Call } from '@twilio/voice-sdk'
+import { SignalWire } from '@signalwire/js'
 import { api } from '@/lib/api/client'
 
 export type TwilioCallState = 'idle' | 'connecting' | 'ringing' | 'live' | 'ended'
 
+type SignalWireClient = Awaited<ReturnType<typeof SignalWire>>
+
 interface UseTwilioReturn {
   callState: TwilioCallState
-  device: Device | null
+  device: SignalWireClient | null
   deviceReady: boolean
   makeCall: (toNumber: string) => Promise<string | null>
   hangUp: () => void
@@ -30,10 +32,10 @@ export function useTwilio(): UseTwilioReturn {
   const [currentCallSid, setCurrentCallSid] = useState<string | null>(null)
   const [initializing, setInitializing] = useState(true)
 
-  const deviceRef = useRef<Device | null>(null)
-  const activeCallRef = useRef<Call | null>(null)
+  const clientRef = useRef<SignalWireClient | null>(null)
+  const activeCallRef = useRef<any>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const tokenRefreshRef = useRef<NodeJS.Timeout | null>(null)
+  const tokenRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef = useRef(true)
 
   // Timer helpers
@@ -51,128 +53,131 @@ export function useTwilio(): UseTwilioReturn {
     }
   }, [])
 
-  // Set up event handlers on a Call object
-  const setupCallHandlers = useCallback((call: Call) => {
+  // Set up event handlers on a SignalWire call object (FabricRoomSession)
+  const setupCallHandlers = useCallback((call: any) => {
     activeCallRef.current = call
-    setCurrentCallSid(call.parameters.CallSid || null)
+    setCurrentCallSid(call.id || null)
+
+    call.on('trying', () => {
+      console.log('[SignalWire] Call trying')
+      if (mountedRef.current) setCallState('connecting')
+    })
 
     call.on('ringing', () => {
-      console.log('[Twilio] Call ringing')
-      setCallState('ringing')
+      console.log('[SignalWire] Call ringing')
+      if (mountedRef.current) setCallState('ringing')
     })
 
-    call.on('accept', () => {
-      console.log('[Twilio] Call accepted/connected')
-      setCallState('live')
-      startTimer()
+    call.on('active', () => {
+      console.log('[SignalWire] Call active/connected')
+      if (mountedRef.current) {
+        setCallState('live')
+        startTimer()
+      }
     })
 
-    call.on('disconnect', () => {
-      console.log('[Twilio] Call disconnected')
+    call.on('destroy', () => {
+      console.log('[SignalWire] Call destroyed/ended')
       stopTimer()
-      setCallState('ended')
+      if (mountedRef.current) {
+        setCallState('ended')
+        setIsMuted(false)
+      }
       activeCallRef.current = null
-      setIsMuted(false)
     })
 
-    call.on('cancel', () => {
-      console.log('[Twilio] Call cancelled')
+    call.on('hangup', () => {
+      console.log('[SignalWire] Call hung up')
       stopTimer()
-      setCallState('ended')
+      if (mountedRef.current) {
+        setCallState('ended')
+        setIsMuted(false)
+      }
       activeCallRef.current = null
-      setIsMuted(false)
-    })
-
-    call.on('error', (err) => {
-      console.error('[Twilio] Call error:', err)
-      stopTimer()
-      setError(err.message || 'Call error')
-      setCallState('ended')
-      activeCallRef.current = null
-      setIsMuted(false)
     })
   }, [startTimer, stopTimer])
 
-  // Initialize Device
+  // Initialize SignalWire client
   const initDevice = useCallback(async () => {
     try {
       setError(null)
       setInitializing(true)
 
-      console.log('[Twilio] Fetching voice token...')
+      console.log('[SignalWire] Fetching voice token...')
       const result = await api.getVoiceToken()
 
       if (!mountedRef.current) return
 
       if (result.error || !result.data) {
         const errorMsg = result.error || 'Failed to get voice token'
-        console.error('[Twilio] Token error:', errorMsg, 'Code:', result.code)
+        console.error('[SignalWire] Token error:', errorMsg, 'Code:', result.code)
         setError(`Voice setup failed: ${errorMsg}`)
         setInitializing(false)
         return
       }
 
       const token = result.data.token
-      console.log('[Twilio] Token received, initializing device...')
+      console.log('[SignalWire] Token received, initializing client...')
 
-      // Destroy existing device if any
-      if (deviceRef.current) {
-        deviceRef.current.destroy()
+      // Disconnect existing client if any
+      if (clientRef.current) {
+        try { await clientRef.current.offline() } catch {}
+        clientRef.current = null
       }
 
-      const device = new Device(token, {
-        codecPreferences: [Call.Codec.Opus, Call.Codec.PCMU],
-        logLevel: 1,
-      })
+      // Clear any existing token refresh interval
+      if (tokenRefreshRef.current) {
+        clearInterval(tokenRefreshRef.current)
+        tokenRefreshRef.current = null
+      }
 
-      device.on('registered', () => {
-        console.log('[Twilio] Device registered and ready')
-        if (mountedRef.current) {
-          setDeviceReady(true)
-          setError(null)
-          setInitializing(false)
+      const sw = await SignalWire({
+        token,
+        incomingCallHandlers: {
+          all: async (notification: any) => {
+            console.log('[SignalWire] Incoming call')
+            if (!mountedRef.current) return
+            const call = await notification.invite.accept({ audio: true, video: false })
+            setupCallHandlers(call)
+          }
         }
       })
 
-      device.on('unregistered', () => {
-        console.log('[Twilio] Device unregistered')
-        if (mountedRef.current) {
-          setDeviceReady(false)
-        }
-      })
+      if (!mountedRef.current) {
+        try { await sw.offline() } catch {}
+        return
+      }
 
-      device.on('error', (err) => {
-        console.error('[Twilio] Device error:', err.message)
-        if (mountedRef.current) {
-          setError(`Twilio: ${err.message}`)
-        }
-      })
+      await sw.online()
 
-      device.on('tokenWillExpire', async () => {
-        console.log('[Twilio] Token expiring, refreshing...')
+      if (!mountedRef.current) {
+        try { await sw.offline() } catch {}
+        return
+      }
+
+      clientRef.current = sw
+      setDeviceReady(true)
+      setError(null)
+      setInitializing(false)
+      console.log('[SignalWire] Client online and ready')
+
+      // Proactively refresh token every 50 minutes (tokens last 2 hours)
+      tokenRefreshRef.current = setInterval(async () => {
         try {
+          console.log('[SignalWire] Refreshing token...')
           const refreshResult = await api.getVoiceToken()
-          if (refreshResult.data?.token) {
-            device.updateToken(refreshResult.data.token)
+          if (refreshResult.data?.token && clientRef.current) {
+            await clientRef.current.updateToken(refreshResult.data.token)
           }
         } catch (e) {
-          console.error('[Twilio] Token refresh failed:', e)
+          console.error('[SignalWire] Token refresh failed:', e)
         }
-      })
-
-      device.on('incoming', (call: Call) => {
-        console.log('[Twilio] Incoming call from:', call.parameters.From)
-        call.accept()
-        setupCallHandlers(call)
-      })
-
-      await device.register()
-      deviceRef.current = device
+      }, 50 * 60 * 1000)
 
     } catch (err: unknown) {
       if (!mountedRef.current) return
-      const message = err instanceof Error ? err.message : 'Failed to initialize Twilio'
-      console.error('[Twilio] Init error:', err)
+      const message = err instanceof Error ? err.message : 'Failed to initialize SignalWire'
+      console.error('[SignalWire] Init error:', err)
       setError(`Voice setup failed: ${message}`)
       setInitializing(false)
     }
@@ -180,8 +185,8 @@ export function useTwilio(): UseTwilioReturn {
 
   // Make a call
   const makeCall = useCallback(async (toNumber: string): Promise<string | null> => {
-    if (!deviceRef.current || !deviceReady) {
-      setError('Twilio device not ready. Click retry to reconnect.')
+    if (!clientRef.current || !deviceReady) {
+      setError('SignalWire device not ready. Click retry to reconnect.')
       return null
     }
 
@@ -190,17 +195,22 @@ export function useTwilio(): UseTwilioReturn {
       setCallState('connecting')
       setDuration(0)
 
-      const call = await deviceRef.current.connect({
-        params: {
-          To: toNumber,
-        },
+      const call = await clientRef.current.dial({
+        to: toNumber,
+        audio: true,
+        video: false,
       })
 
       setupCallHandlers(call)
-      return call.parameters.CallSid || null
+
+      if (typeof call.start === 'function') {
+        await call.start()
+      }
+
+      return call.id || null
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to make call'
-      console.error('[Twilio] makeCall error:', err)
+      console.error('[SignalWire] makeCall error:', err)
       setError(message)
       setCallState('idle')
       return null
@@ -210,7 +220,7 @@ export function useTwilio(): UseTwilioReturn {
   // Hang up
   const hangUp = useCallback(() => {
     if (activeCallRef.current) {
-      activeCallRef.current.disconnect()
+      activeCallRef.current.hangup().catch(console.error)
     }
     stopTimer()
   }, [stopTimer])
@@ -219,18 +229,26 @@ export function useTwilio(): UseTwilioReturn {
   const toggleMute = useCallback(() => {
     if (activeCallRef.current) {
       const newMuted = !isMuted
-      activeCallRef.current.mute(newMuted)
+      if (newMuted) {
+        activeCallRef.current.audioMute().catch(console.error)
+      } else {
+        activeCallRef.current.audioUnmute().catch(console.error)
+      }
       setIsMuted(newMuted)
     }
   }, [isMuted])
 
   // Retry connection
   const retry = useCallback(() => {
-    console.log('[Twilio] Retrying initialization...')
+    console.log('[SignalWire] Retrying initialization...')
     setDeviceReady(false)
-    if (deviceRef.current) {
-      deviceRef.current.destroy()
-      deviceRef.current = null
+    if (tokenRefreshRef.current) {
+      clearInterval(tokenRefreshRef.current)
+      tokenRefreshRef.current = null
+    }
+    if (clientRef.current) {
+      clientRef.current.offline().catch(() => {})
+      clientRef.current = null
     }
     initDevice()
   }, [initDevice])
@@ -242,22 +260,22 @@ export function useTwilio(): UseTwilioReturn {
 
     return () => {
       mountedRef.current = false
-      if (deviceRef.current) {
-        deviceRef.current.destroy()
-        deviceRef.current = null
+      if (clientRef.current) {
+        clientRef.current.offline().catch(() => {})
+        clientRef.current = null
       }
       if (timerRef.current) {
         clearInterval(timerRef.current)
       }
       if (tokenRefreshRef.current) {
-        clearTimeout(tokenRefreshRef.current)
+        clearInterval(tokenRefreshRef.current)
       }
     }
   }, [initDevice])
 
   return {
     callState,
-    device: deviceRef.current,
+    device: clientRef.current,
     deviceReady,
     makeCall,
     hangUp,

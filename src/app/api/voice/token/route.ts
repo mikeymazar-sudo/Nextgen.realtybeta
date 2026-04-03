@@ -1,28 +1,38 @@
 import { NextRequest } from 'next/server'
-import twilio from 'twilio'
 import { withAuth } from '@/lib/auth/middleware'
 import { apiSuccess, Errors } from '@/lib/api/response'
 
 export const GET = withAuth(async (_req: NextRequest, { user }) => {
   try {
-    const AccessToken = twilio.jwt.AccessToken
-    const VoiceGrant = AccessToken.VoiceGrant
+    const spaceUrl = process.env.SIGNALWIRE_SPACE_URL!
+    const projectId = process.env.SIGNALWIRE_PROJECT_ID!
+    const apiToken = process.env.SIGNALWIRE_API_TOKEN!
 
-    const token = new AccessToken(
-      process.env.TWILIO_ACCOUNT_SID!,
-      process.env.TWILIO_API_KEY_SID!,
-      process.env.TWILIO_API_KEY_SECRET!,
-      { identity: user.id, ttl: 3600 }
+    const credentials = Buffer.from(`${projectId}:${apiToken}`).toString('base64')
+
+    const response = await fetch(
+      `https://${spaceUrl}/api/fabric/subscribers/tokens`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${credentials}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reference: user.id,
+        }),
+      }
     )
 
-    const voiceGrant = new VoiceGrant({
-      outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID!,
-      incomingAllow: true,
-    })
+    if (!response.ok) {
+      const text = await response.text()
+      console.error('SignalWire token error:', response.status, text)
+      return Errors.internal()
+    }
 
-    token.addGrant(voiceGrant)
+    const data = await response.json()
 
-    return apiSuccess({ token: token.toJwt(), identity: user.id })
+    return apiSuccess({ token: data.token, identity: user.id })
   } catch (error) {
     console.error('Voice token error:', error)
     return Errors.internal()

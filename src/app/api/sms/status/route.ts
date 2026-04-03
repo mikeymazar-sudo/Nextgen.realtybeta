@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import twilio from 'twilio';
+import { RestClient } from '@signalwire/compatibility-api';
 import { updateMessageStatus } from '@/lib/twilio/sms';
 
-const authToken = process.env.TWILIO_AUTH_TOKEN;
+const signingKey = process.env.SIGNALWIRE_SIGNING_KEY;
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the Twilio signature for validation
-    const signature = request.headers.get('x-twilio-signature') || '';
+    // Get the SignalWire signature for validation
+    const signature = request.headers.get('x-signalwire-signature') || '';
     const url = request.url;
 
-    // Parse form data from Twilio webhook
+    // Parse form data from SignalWire webhook
     const formData = await request.formData();
     const params: Record<string, any> = {};
     formData.forEach((value, key) => {
@@ -18,16 +18,16 @@ export async function POST(request: NextRequest) {
     });
 
     // Validate webhook authenticity
-    if (authToken) {
-      const isValid = twilio.validateRequest(
-        authToken,
+    if (signingKey) {
+      const isValid = RestClient.validateRequest(
+        signingKey,
         signature,
         url,
         params
       );
 
       if (!isValid) {
-        console.error('Invalid Twilio signature');
+        console.error('Invalid SignalWire signature');
         return new NextResponse('Forbidden', { status: 403 });
       }
     }

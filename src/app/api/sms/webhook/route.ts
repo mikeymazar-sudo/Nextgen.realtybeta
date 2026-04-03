@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import twilio from 'twilio';
+import { RestClient } from '@signalwire/compatibility-api';
 import { createServerClient as createClient } from '@/lib/supabase/server';
 
-const authToken = process.env.TWILIO_AUTH_TOKEN;
+const signingKey = process.env.SIGNALWIRE_SIGNING_KEY;
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the Twilio signature for validation
-    const signature = request.headers.get('x-twilio-signature') || '';
+    // Get the SignalWire signature for validation
+    const signature = request.headers.get('x-signalwire-signature') || '';
     const url = request.url;
 
-    // Parse form data from Twilio webhook
+    // Parse form data from SignalWire webhook
     const formData = await request.formData();
     const params: Record<string, any> = {};
     formData.forEach((value, key) => {
@@ -18,32 +18,27 @@ export async function POST(request: NextRequest) {
     });
 
     // Validate webhook authenticity
-    if (authToken) {
-      const isValid = twilio.validateRequest(
-        authToken,
+    if (signingKey) {
+      const isValid = RestClient.validateRequest(
+        signingKey,
         signature,
         url,
         params
       );
 
       if (!isValid) {
-        console.error('Invalid Twilio signature');
+        console.error('Invalid SignalWire signature');
         return new NextResponse('Forbidden', { status: 403 });
       }
     }
 
-    // Extract message details from Twilio webhook
+    // Extract message details from SignalWire webhook
     const {
       MessageSid,
       From,
       To,
       Body,
       NumMedia,
-      MediaUrl0,
-      MediaUrl1,
-      MediaUrl2,
-      MediaUrl3,
-      MediaUrl4,
       NumSegments,
       SmsStatus
     } = params;
@@ -65,7 +60,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     // Store incoming message in database
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('messages')
       .insert({
         body: Body || '',
@@ -86,14 +81,11 @@ export async function POST(request: NextRequest) {
       console.error('Error storing incoming message:', error);
     }
 
-    // TODO: Add auto-response logic here if needed
-    // For example, respond to specific keywords like HELP or STOP
-
-    // Respond with TwiML (empty response means no auto-reply)
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    // Respond with empty cXML (no auto-reply)
+    const cxml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response></Response>`;
 
-    return new NextResponse(twiml, {
+    return new NextResponse(cxml, {
       status: 200,
       headers: {
         'Content-Type': 'text/xml'

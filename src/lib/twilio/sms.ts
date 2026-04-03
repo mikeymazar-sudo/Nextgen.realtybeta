@@ -1,19 +1,20 @@
-import twilio from 'twilio';
+import { RestClient } from '@signalwire/compatibility-api';
 import { createServerClient as createClient } from '@/lib/supabase/server';
 
-function getTwilioClient() {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!accountSid || !authToken) {
-    throw new Error('Missing Twilio credentials in environment variables');
+function getSignalWireClient() {
+  const projectId = process.env.SIGNALWIRE_PROJECT_ID;
+  const apiToken = process.env.SIGNALWIRE_API_TOKEN;
+  const spaceUrl = process.env.SIGNALWIRE_SPACE_URL;
+  if (!projectId || !apiToken || !spaceUrl) {
+    throw new Error('Missing SignalWire credentials in environment variables');
   }
-  return twilio(accountSid, authToken);
+  return RestClient(projectId, apiToken, { signalwireSpaceUrl: spaceUrl });
 }
 
-function getTwilioPhoneNumber() {
-  const phoneNumber = process.env.TWILIO_PHONE_NUMBER;
+function getSignalWirePhoneNumber() {
+  const phoneNumber = process.env.SIGNALWIRE_PHONE_NUMBER;
   if (!phoneNumber) {
-    throw new Error('Missing TWILIO_PHONE_NUMBER environment variable');
+    throw new Error('Missing SIGNALWIRE_PHONE_NUMBER environment variable');
   }
   return phoneNumber;
 }
@@ -38,7 +39,7 @@ export interface SMSResult {
  */
 export async function sendSMS(params: SendSMSParams): Promise<SMSResult> {
   const { to, body, contactId, propertyId, mediaUrls } = params;
-  const phoneNumber = getTwilioPhoneNumber();
+  const phoneNumber = getSignalWirePhoneNumber();
 
   try {
     // Validate phone number format
@@ -46,8 +47,8 @@ export async function sendSMS(params: SendSMSParams): Promise<SMSResult> {
       throw new Error('Phone number must be in E.164 format (e.g., +1234567890)');
     }
 
-    // Send SMS via Twilio
-    const message = await getTwilioClient().messages.create({
+    // Send SMS via SignalWire
+    const message = await getSignalWireClient().messages.create({
       body,
       from: phoneNumber,
       to,
@@ -78,7 +79,7 @@ export async function sendSMS(params: SendSMSParams): Promise<SMSResult> {
 
     if (error) {
       console.error('Error storing message in database:', error);
-      // Still return success since Twilio sent the message
+      // Still return success since SignalWire sent the message
       return {
         success: true,
         messageSid: message.sid,
@@ -93,7 +94,7 @@ export async function sendSMS(params: SendSMSParams): Promise<SMSResult> {
     };
 
   } catch (error: any) {
-    console.error('Error sending SMS:', error);
+    console.error('Error sending SMS via SignalWire:', error);
 
     // Store failed message in database
     try {
@@ -167,7 +168,7 @@ export async function getRecentMessages(limit: number = 50) {
 }
 
 /**
- * Update message status from Twilio webhook
+ * Update message status from SignalWire webhook
  */
 export async function updateMessageStatus(
   twilioSid: string,
