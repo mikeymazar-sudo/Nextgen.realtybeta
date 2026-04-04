@@ -76,7 +76,7 @@ export function DialerSidebarWidget() {
         error: twilioError,
         retry,
         initializing,
-    } = useTwilio()
+    } = useTwilio({ suppressConfigurationErrors: true })
 
     // ─── Power Dialer ────────────────────────────────────────────
     const powerDialer = usePowerDialer({

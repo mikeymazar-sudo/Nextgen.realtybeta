@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/auth-provider'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,6 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   LayoutDashboard,
   Building2,
-  Phone,
   Settings,
   LogOut,
   User,
@@ -32,7 +31,14 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const { profile, signOut } = useAuth()
+
+  const handleSignOut = async () => {
+    await signOut()
+    router.replace('/login')
+    router.refresh()
+  }
 
   const initials = profile?.full_name
     ? profile.full_name
@@ -114,7 +120,9 @@ export function Sidebar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={signOut}
+                onClick={() => {
+                  void handleSignOut()
+                }}
                 className="text-red-600 cursor-pointer dark:text-red-400"
               >
                 <LogOut className="mr-2 h-4 w-4" />

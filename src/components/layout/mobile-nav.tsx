@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/auth-provider'
 import { Button } from '@/components/ui/button'
@@ -32,7 +32,15 @@ const navItems = [
 export function MobileNav() {
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
+  const router = useRouter()
   const { profile, signOut } = useAuth()
+
+  const handleSignOut = async () => {
+    await signOut()
+    setOpen(false)
+    router.replace('/login')
+    router.refresh()
+  }
 
   const initials = profile?.full_name
     ? profile.full_name
@@ -103,8 +111,7 @@ export function MobileNav() {
               size="sm"
               className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
               onClick={() => {
-                signOut()
-                setOpen(false)
+                void handleSignOut()
               }}
             >
               <LogOut className="mr-2 h-4 w-4" />

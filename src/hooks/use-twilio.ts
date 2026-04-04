@@ -23,7 +23,13 @@ interface UseTwilioReturn {
   initializing: boolean
 }
 
-export function useTwilio(): UseTwilioReturn {
+interface UseTwilioOptions {
+  suppressConfigurationErrors?: boolean
+}
+
+export function useTwilio({
+  suppressConfigurationErrors = false,
+}: UseTwilioOptions = {}): UseTwilioReturn {
   const [callState, setCallState] = useState<TwilioCallState>('idle')
   const [deviceReady, setDeviceReady] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
@@ -109,9 +115,17 @@ export function useTwilio(): UseTwilioReturn {
       if (!mountedRef.current) return
 
       if (result.error || !result.data) {
-        const errorMsg = result.error || 'Failed to get voice token'
-        console.error('[SignalWire] Token error:', errorMsg, 'Code:', result.code)
-        setError(`Voice setup failed: ${errorMsg}`)
+        const isConfigurationError = result.code === 'VOICE_NOT_CONFIGURED'
+        const errorMsg = isConfigurationError
+          ? 'Voice calling is not configured for this environment.'
+          : result.error || 'Failed to get voice token'
+
+        setError(
+          isConfigurationError && suppressConfigurationErrors
+            ? null
+            : `Voice setup failed: ${errorMsg}`
+        )
+        setDeviceReady(false)
         setInitializing(false)
         return
       }
@@ -180,7 +194,7 @@ export function useTwilio(): UseTwilioReturn {
       setError(`Voice setup failed: ${message}`)
       setInitializing(false)
     }
-  }, [setupCallHandlers])
+  }, [setupCallHandlers, suppressConfigurationErrors])
 
   // Make a call
   const makeCall = useCallback(async (toNumber: string): Promise<string | null> => {
