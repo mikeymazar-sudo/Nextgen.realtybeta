@@ -31,6 +31,7 @@ import { PowerDialerSetupDialog } from './power-dialer-setup-dialog'
 import { PowerDialerControls } from './power-dialer-controls'
 import { PowerDialerSkipTraceDialog } from './power-dialer-skip-trace-dialog'
 import { SMSTemplateEditorDialog } from './sms-template-editor-dialog'
+import { extractPhoneNumberValue, normalizePhoneNumber } from '@/lib/utils'
 
 const dialPad = [
     ['1', '2', '3'],
@@ -115,13 +116,19 @@ export function DialerSidebarWidget() {
         // Small delay to let state settle
         await new Promise(r => setTimeout(r, 100))
 
+        const normalizedNumber = normalizePhoneNumber(phoneNumber)
+        if (!normalizedNumber) {
+            toast.error('Invalid phone number')
+            return
+        }
+
         try {
             const supabase = createClient()
             const { data: callRecord } = await supabase
                 .from('calls')
                 .insert({
                     caller_id: user?.id,
-                    to_number: phoneNumber,
+                    to_number: normalizedNumber,
                     status: 'initiated',
                     from_number: '',
                     property_id: associatedPropertyId || propertyId,
@@ -133,7 +140,7 @@ export function DialerSidebarWidget() {
                 setCurrentCallId(callRecord.id)
             }
 
-            const callSid = await twilioMakeCall(phoneNumber)
+            const callSid = await twilioMakeCall(normalizedNumber)
 
             if (callSid && callRecord) {
                 await supabase
@@ -174,7 +181,8 @@ export function DialerSidebarWidget() {
             const callKey = `${dialNumber}-${autoCall}`
             if (autoCallProcessedRef.current === callKey) return
 
-            setNumber(dialNumber)
+            const cleanedDialNumber = extractPhoneNumberValue(dialNumber)
+            setNumber(cleanedDialNumber)
             setIsExpanded(true)
 
             if (contactNameParam) setContactName(decodeURIComponent(contactNameParam))
@@ -183,7 +191,7 @@ export function DialerSidebarWidget() {
             if (autoCall === 'true') {
                 autoCallProcessedRef.current = callKey
                 if (deviceReady && callState === 'idle') {
-                    initiateAutoCall(dialNumber, derivedPropertyId)
+                    initiateAutoCall(cleanedDialNumber, derivedPropertyId)
                 } else {
                     setPendingAutoCall(true)
                 }
@@ -285,13 +293,19 @@ export function DialerSidebarWidget() {
 
         setIsExpanded(true)
 
+        const normalizedNumber = normalizePhoneNumber(number)
+        if (!normalizedNumber) {
+            toast.error('Enter a valid phone number')
+            return
+        }
+
         try {
             const supabase = createClient()
             const { data: callRecord } = await supabase
                 .from('calls')
                 .insert({
                     caller_id: user?.id,
-                    to_number: number,
+                    to_number: normalizedNumber,
                     status: 'initiated',
                     from_number: '',
                     property_id: propertyId,
@@ -303,7 +317,7 @@ export function DialerSidebarWidget() {
                 setCurrentCallId(callRecord.id)
             }
 
-            const callSid = await twilioMakeCall(number)
+            const callSid = await twilioMakeCall(normalizedNumber)
 
             if (callSid && callRecord) {
                 await supabase

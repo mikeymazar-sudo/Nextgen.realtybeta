@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { SignalWire } from '@signalwire/js'
 import { api } from '@/lib/api/client'
+import { normalizePhoneNumber } from '@/lib/utils'
 
 export type TwilioCallState = 'idle' | 'connecting' | 'ringing' | 'live' | 'ended'
 
@@ -203,13 +204,20 @@ export function useTwilio({
       return null
     }
 
+    const normalizedToNumber = normalizePhoneNumber(toNumber)
+    if (!normalizedToNumber) {
+      setError('Invalid phone number. Use a valid 10-digit or E.164 number.')
+      setCallState('idle')
+      return null
+    }
+
     try {
       setError(null)
       setCallState('connecting')
       setDuration(0)
 
       const call = await clientRef.current.dial({
-        to: toNumber,
+        to: normalizedToNumber,
         audio: true,
         video: false,
       })

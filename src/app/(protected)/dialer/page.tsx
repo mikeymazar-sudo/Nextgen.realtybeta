@@ -23,6 +23,7 @@ import { formatDistanceToNow } from 'date-fns'
 import type { Call } from '@/types/schema'
 import { useSearchParams } from 'next/navigation'
 import { useTwilio } from '@/hooks/use-twilio'
+import { extractPhoneNumberValue, normalizePhoneNumber } from '@/lib/utils'
 
 const dialPad = [
   ['1', '2', '3'],
@@ -65,7 +66,7 @@ export default function DialerPage() {
   // Pre-fill number from URL params
   useEffect(() => {
     const num = searchParams.get('number')
-    if (num) setNumber(num)
+    if (num) setNumber(extractPhoneNumberValue(num))
   }, [searchParams])
 
   // Fetch call history
@@ -95,6 +96,12 @@ export default function DialerPage() {
   const handleMakeCall = async () => {
     if (!number.trim()) return
 
+    const normalizedNumber = normalizePhoneNumber(number)
+    if (!normalizedNumber) {
+      toast.error('Enter a valid phone number')
+      return
+    }
+
     try {
       // Create a call record in the database
       const supabase = createClient()
@@ -102,7 +109,7 @@ export default function DialerPage() {
         .from('calls')
         .insert({
           caller_id: user?.id,
-          to_number: number,
+          to_number: normalizedNumber,
           status: 'initiated',
           from_number: '',
         })
@@ -114,7 +121,7 @@ export default function DialerPage() {
       }
 
       // Make the actual Twilio call
-      const callSid = await twilioMakeCall(number)
+      const callSid = await twilioMakeCall(normalizedNumber)
 
       // Update the record with the Twilio Call SID
       if (callSid && callRecord) {
