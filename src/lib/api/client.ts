@@ -230,7 +230,7 @@ class ApiClient {
 
   // Voice
   async getVoiceToken() {
-    return this.request<{ token: string; identity: string }>('/api/voice/token')
+    return this.request<{ token: string; identity: string; outboundAddressId: string }>('/api/voice/token')
   }
 
   async updateCallNotes(callId: string, notes: string, propertyId?: string) {

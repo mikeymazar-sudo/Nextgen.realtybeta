@@ -383,6 +383,20 @@ interface UsePowerDialerParams {
   userId: string | undefined
 }
 
+type QueuePropertyRow = {
+  id: string
+  address: string
+  city: string | null
+  state: string | null
+  zip: string | null
+  owner_name: string | null
+  owner_phone: string[] | null
+  contacts: Array<{
+    id: string
+    phone_numbers: PhoneEntry[] | string[] | null
+  }> | null
+}
+
 export function usePowerDialer({
   callState,
   duration,
@@ -462,7 +476,7 @@ export function usePowerDialer({
         return
       }
 
-      const queue: PowerDialerLead[] = data.map((p: any) => {
+      const queue: PowerDialerLead[] = (data as QueuePropertyRow[]).map((p) => {
         const contacts = p.contacts || []
         const firstContact = contacts[0]
         return {
@@ -481,7 +495,7 @@ export function usePowerDialer({
 
       dispatch({ type: 'QUEUE_LOADED', queue })
       toast.success(`Loaded ${queue.length} leads`)
-    } catch (err) {
+    } catch {
       toast.error('Failed to load queue')
       dispatch({ type: 'STOP' })
     }
@@ -543,7 +557,10 @@ export function usePowerDialer({
     // Initiate the call
     dispatch({ type: 'DIALING', phone: e164Phone })
     try {
-      await makeCall(e164Phone)
+      const callId = await makeCall(e164Phone)
+      if (!callId) {
+        throw new Error('SignalWire call did not return an id')
+      }
     } catch {
       toast.error('Failed to place call')
       dispatch({ type: 'DISPOSITION' })
@@ -616,13 +633,16 @@ export function usePowerDialer({
           dispatch({ type: 'CALL_FAILED_INSTANT' })
           toast.info('Call failed — retrying...')
           redialTimeoutRef.current = setTimeout(async () => {
-            if (stateRef.current.currentPhone) {
-              dispatch({ type: 'DIALING', phone: stateRef.current.currentPhone })
-              try {
-                await makeCall(stateRef.current.currentPhone)
-              } catch {
-                // If makeCall itself fails, treat as disconnected
-                const lead = stateRef.current.queue[stateRef.current.currentIndex]
+          if (stateRef.current.currentPhone) {
+            dispatch({ type: 'DIALING', phone: stateRef.current.currentPhone })
+            try {
+              const callId = await makeCall(stateRef.current.currentPhone)
+              if (!callId) {
+                throw new Error('SignalWire call did not return an id')
+              }
+            } catch {
+              // If makeCall itself fails, treat as disconnected
+              const lead = stateRef.current.queue[stateRef.current.currentIndex]
                 const currentPhone = stateRef.current.currentPhone
                 if (lead && currentPhone) {
                   // Find alternate phones (exclude disconnected one)
@@ -670,7 +690,10 @@ export function usePowerDialer({
           if (stateRef.current.currentPhone) {
             dispatch({ type: 'DIALING', phone: stateRef.current.currentPhone })
             try {
-              await makeCall(stateRef.current.currentPhone)
+              const callId = await makeCall(stateRef.current.currentPhone)
+              if (!callId) {
+                throw new Error('SignalWire call did not return an id')
+              }
             } catch {
               toast.error('Redial failed')
               dispatch({ type: 'AUTO_ADVANCE_NO_ANSWER' })

@@ -3,11 +3,28 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { SignalWire } from '@signalwire/js'
 import { api } from '@/lib/api/client'
+import { pickSignalWireExternalAudioAddressId, type SignalWireAddress } from '@/lib/signalwire/shared'
 import { normalizePhoneNumber } from '@/lib/utils'
 
 export type TwilioCallState = 'idle' | 'connecting' | 'ringing' | 'live' | 'ended'
 
 type SignalWireClient = Awaited<ReturnType<typeof SignalWire>>
+type SignalWireCall = {
+  id?: string
+  on: (event: string, listener: () => void) => void
+  start?: () => Promise<void>
+  hangup: () => Promise<void>
+  audioMute: () => Promise<void>
+  audioUnmute: () => Promise<void>
+}
+type SignalWireIncomingNotification = {
+  invite: {
+    accept: (options: { audio: boolean; video: boolean }) => Promise<SignalWireCall>
+  }
+}
+type SignalWireAddressResult = {
+  data: SignalWireAddress[]
+}
 
 interface UseTwilioReturn {
   callState: TwilioCallState
@@ -32,6 +49,7 @@ export function useTwilio({
   suppressConfigurationErrors = false,
 }: UseTwilioOptions = {}): UseTwilioReturn {
   const [callState, setCallState] = useState<TwilioCallState>('idle')
+  const [device, setDevice] = useState<SignalWireClient | null>(null)
   const [deviceReady, setDeviceReady] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [duration, setDuration] = useState(0)
@@ -40,7 +58,8 @@ export function useTwilio({
   const [initializing, setInitializing] = useState(true)
 
   const clientRef = useRef<SignalWireClient | null>(null)
-  const activeCallRef = useRef<any>(null)
+  const activeCallRef = useRef<SignalWireCall | null>(null)
+  const outboundAddressIdRef = useRef<string | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const tokenRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef = useRef(true)
@@ -60,8 +79,32 @@ export function useTwilio({
     }
   }, [])
 
+  const clearClient = useCallback(async () => {
+    if (tokenRefreshRef.current) {
+      clearInterval(tokenRefreshRef.current)
+      tokenRefreshRef.current = null
+    }
+
+    if (clientRef.current) {
+      try {
+        await clientRef.current.offline()
+      } catch {
+        // Ignore cleanup errors while resetting the client state.
+      }
+    }
+
+    clientRef.current = null
+    outboundAddressIdRef.current = null
+    activeCallRef.current = null
+
+    if (mountedRef.current) {
+      setDevice(null)
+      setDeviceReady(false)
+    }
+  }, [])
+
   // Set up event handlers on a SignalWire call object (FabricRoomSession)
-  const setupCallHandlers = useCallback((call: any) => {
+  const setupCallHandlers = useCallback((call: SignalWireCall) => {
     activeCallRef.current = call
     setCurrentCallSid(call.id || null)
 
@@ -132,19 +175,11 @@ export function useTwilio({
       }
 
       const token = result.data.token
+      let outboundAddressId = result.data.outboundAddressId || null
       console.log('[SignalWire] Token received, initializing client...')
 
       // Disconnect existing client if any
-      if (clientRef.current) {
-        try { await clientRef.current.offline() } catch {}
-        clientRef.current = null
-      }
-
-      // Clear any existing token refresh interval
-      if (tokenRefreshRef.current) {
-        clearInterval(tokenRefreshRef.current)
-        tokenRefreshRef.current = null
-      }
+      await clearClient()
 
       const sw = await SignalWire({ token })
 
@@ -155,7 +190,7 @@ export function useTwilio({
 
       await sw.online({
         incomingCallHandlers: {
-          all: async (notification: any) => {
+          all: async (notification: SignalWireIncomingNotification) => {
             console.log('[SignalWire] Incoming call')
             if (!mountedRef.current) return
             const call = await notification.invite.accept({ audio: true, video: false })
@@ -169,11 +204,40 @@ export function useTwilio({
         return
       }
 
+      if (!outboundAddressId) {
+        try {
+          const addressResult = await sw.address.getAddresses({
+            type: 'app',
+            pageSize: 100,
+          }) as SignalWireAddressResult
+          outboundAddressId = pickSignalWireExternalAudioAddressId(
+            addressResult.data || []
+          )
+        } catch (lookupError) {
+          console.error('[SignalWire] Failed to resolve outbound address:', lookupError)
+        }
+      }
+
+      if (!outboundAddressId) {
+        const message =
+          'No outbound SignalWire audio address is configured for this environment.'
+        await sw.offline().catch(() => {})
+        setError(`Voice setup failed: ${message}`)
+        setInitializing(false)
+        setDeviceReady(false)
+        setDevice(null)
+        return
+      }
+
       clientRef.current = sw
+      outboundAddressIdRef.current = outboundAddressId
+      setDevice(sw)
       setDeviceReady(true)
       setError(null)
       setInitializing(false)
-      console.log('[SignalWire] Client online and ready')
+      console.log('[SignalWire] Client online and ready', {
+        outboundAddressId,
+      })
 
       // Proactively refresh token every 50 minutes (tokens last 2 hours)
       tokenRefreshRef.current = setInterval(async () => {
@@ -181,6 +245,8 @@ export function useTwilio({
           console.log('[SignalWire] Refreshing token...')
           const refreshResult = await api.getVoiceToken()
           if (refreshResult.data?.token && clientRef.current) {
+            outboundAddressIdRef.current =
+              refreshResult.data.outboundAddressId || outboundAddressIdRef.current
             await clientRef.current.updateToken(refreshResult.data.token)
           }
         } catch (e) {
@@ -195,20 +261,30 @@ export function useTwilio({
       setError(`Voice setup failed: ${message}`)
       setInitializing(false)
     }
-  }, [setupCallHandlers, suppressConfigurationErrors])
+  }, [clearClient, setupCallHandlers, suppressConfigurationErrors])
 
   // Make a call
   const makeCall = useCallback(async (toNumber: string): Promise<string | null> => {
     if (!clientRef.current || !deviceReady) {
-      setError('SignalWire device not ready. Click retry to reconnect.')
-      return null
+      const message = 'SignalWire device not ready. Click retry to reconnect.'
+      setError(message)
+      throw new Error(message)
     }
 
     const normalizedToNumber = normalizePhoneNumber(toNumber)
     if (!normalizedToNumber) {
-      setError('Invalid phone number. Use a valid 10-digit or E.164 number.')
+      const message = 'Invalid phone number. Use a valid 10-digit or E.164 number.'
+      setError(message)
       setCallState('idle')
-      return null
+      throw new Error(message)
+    }
+
+    if (!outboundAddressIdRef.current) {
+      const message =
+        'SignalWire outbound caller address is not configured. Retry after reconnecting.'
+      setError(message)
+      setCallState('idle')
+      throw new Error(message)
     }
 
     try {
@@ -217,6 +293,7 @@ export function useTwilio({
       setDuration(0)
 
       const call = await clientRef.current.dial({
+        fromFabricAddressId: outboundAddressIdRef.current,
         to: normalizedToNumber,
         audio: true,
         video: false,
@@ -234,7 +311,7 @@ export function useTwilio({
       console.error('[SignalWire] makeCall error:', err)
       setError(message)
       setCallState('idle')
-      return null
+      throw err instanceof Error ? err : new Error(message)
     }
   }, [deviceReady, setupCallHandlers])
 
@@ -263,40 +340,32 @@ export function useTwilio({
   const retry = useCallback(() => {
     console.log('[SignalWire] Retrying initialization...')
     setDeviceReady(false)
-    if (tokenRefreshRef.current) {
-      clearInterval(tokenRefreshRef.current)
-      tokenRefreshRef.current = null
-    }
-    if (clientRef.current) {
-      clientRef.current.offline().catch(() => {})
-      clientRef.current = null
-    }
-    initDevice()
-  }, [initDevice])
+    setDevice(null)
+    clearClient().finally(() => {
+      void initDevice()
+    })
+  }, [clearClient, initDevice])
 
   // Initialize on mount
   useEffect(() => {
     mountedRef.current = true
-    initDevice()
+    const initTimer = setTimeout(() => {
+      void initDevice()
+    }, 0)
 
     return () => {
+      clearTimeout(initTimer)
       mountedRef.current = false
-      if (clientRef.current) {
-        clientRef.current.offline().catch(() => {})
-        clientRef.current = null
-      }
+      void clearClient()
       if (timerRef.current) {
         clearInterval(timerRef.current)
       }
-      if (tokenRefreshRef.current) {
-        clearInterval(tokenRefreshRef.current)
-      }
     }
-  }, [initDevice])
+  }, [clearClient, initDevice])
 
   return {
     callState,
-    device: clientRef.current,
+    device,
     deviceReady,
     makeCall,
     hangUp,

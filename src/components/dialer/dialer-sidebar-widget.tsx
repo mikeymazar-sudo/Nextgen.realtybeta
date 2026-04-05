@@ -141,8 +141,11 @@ export function DialerSidebarWidget() {
             }
 
             const callSid = await twilioMakeCall(normalizedNumber)
+            if (!callSid) {
+                throw new Error('SignalWire call did not return an id')
+            }
 
-            if (callSid && callRecord) {
+            if (callRecord) {
                 await supabase
                     .from('calls')
                     .update({ twilio_call_sid: callSid })
@@ -318,8 +321,11 @@ export function DialerSidebarWidget() {
             }
 
             const callSid = await twilioMakeCall(normalizedNumber)
+            if (!callSid) {
+                throw new Error('SignalWire call did not return an id')
+            }
 
-            if (callSid && callRecord) {
+            if (callRecord) {
                 await supabase
                     .from('calls')
                     .update({ twilio_call_sid: callSid })

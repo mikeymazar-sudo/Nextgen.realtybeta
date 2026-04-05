@@ -122,9 +122,12 @@ export default function DialerPage() {
 
       // Make the actual Twilio call
       const callSid = await twilioMakeCall(normalizedNumber)
+      if (!callSid) {
+        throw new Error('SignalWire call did not return an id')
+      }
 
       // Update the record with the Twilio Call SID
-      if (callSid && callRecord) {
+      if (callRecord) {
         await supabase
           .from('calls')
           .update({ twilio_call_sid: callSid })
