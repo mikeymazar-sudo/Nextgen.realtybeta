@@ -1,27 +1,22 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { SignalWire } from '@signalwire/js'
+import {
+  SignalWire,
+  type FabricRoomSession,
+  type IncomingCallNotification,
+  type SignalWireClient,
+} from '@signalwire/js'
 import { api } from '@/lib/api/client'
 import { pickSignalWireExternalAudioAddressId, type SignalWireAddress } from '@/lib/signalwire/shared'
 import { normalizePhoneNumber } from '@/lib/utils'
 
 export type TwilioCallState = 'idle' | 'connecting' | 'ringing' | 'live' | 'ended'
 
-type SignalWireClient = Awaited<ReturnType<typeof SignalWire>>
-type SignalWireCall = {
-  id?: string
-  on: (event: string, listener: () => void) => void
-  start?: () => Promise<void>
-  hangup: () => Promise<void>
-  audioMute: () => Promise<void>
-  audioUnmute: () => Promise<void>
-}
-type SignalWireIncomingNotification = {
-  invite: {
-    accept: (options: { audio: boolean; video: boolean }) => Promise<SignalWireCall>
-  }
-}
+type SignalWireCall = Pick<
+  FabricRoomSession,
+  'id' | 'on' | 'start' | 'hangup' | 'audioMute' | 'audioUnmute'
+>
 type SignalWireAddressResult = {
   data: SignalWireAddress[]
 }
@@ -190,7 +185,7 @@ export function useTwilio({
 
       await sw.online({
         incomingCallHandlers: {
-          all: async (notification: SignalWireIncomingNotification) => {
+          all: async (notification: IncomingCallNotification) => {
             console.log('[SignalWire] Incoming call')
             if (!mountedRef.current) return
             const call = await notification.invite.accept({ audio: true, video: false })

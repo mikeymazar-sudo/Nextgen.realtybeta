@@ -17,7 +17,7 @@ function copySupabaseResponse(targetResponse: NextResponse, sourceResponse: Next
   return targetResponse
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })

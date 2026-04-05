@@ -347,7 +347,7 @@ export interface PowerDialerLead {
   ownerName: string | null
   ownerPhone: string[] | null
   contactId: string | null
-  contactPhones: string[] | null
+  contactPhones: PhoneEntry[] | string[] | null
   dialStatus: 'pending' | 'called' | 'skipped' | 'no_answer' | 'interested' | 'not_interested'
 }
 
