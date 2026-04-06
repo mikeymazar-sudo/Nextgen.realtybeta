@@ -37,15 +37,44 @@ class ApiClient {
         ...options,
       })
 
-      const json = await res.json()
+      const rawBody = await res.text()
+      let json: { data?: T; cached?: boolean; error?: string; code?: string } | null = null
 
-      if (!res.ok) {
-        return { error: json.error || 'Request failed', code: json.code }
+      if (rawBody) {
+        try {
+          json = JSON.parse(rawBody) as {
+            data?: T
+            cached?: boolean
+            error?: string
+            code?: string
+          }
+        } catch {
+          json = null
+        }
       }
 
-      return { data: json.data, cached: json.cached }
-    } catch {
-      return { error: 'Network error. Please check your connection.' }
+      if (!res.ok) {
+        return {
+          error:
+            json?.error ||
+            rawBody ||
+            `Request failed with status ${res.status}`,
+          code: json?.code,
+        }
+      }
+
+      if (json) {
+        return { data: json.data, cached: json.cached }
+      }
+
+      return { error: `Unexpected response from ${endpoint}` }
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : 'Network error. Please check your connection.'
+
+      return { error: message }
     }
   }
 

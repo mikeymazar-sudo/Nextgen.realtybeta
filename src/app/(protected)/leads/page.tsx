@@ -8,13 +8,15 @@ import { LeadsFilterPanel, type LeadsFilters } from '@/components/leads/leads-fi
 import { BulkActionsBar } from '@/components/leads/bulk-actions-bar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Building2 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { Button } from '@/components/ui/button'
+import { api } from '@/lib/api/client'
 import { useAuth } from '@/providers/auth-provider'
 import type { Property } from '@/types/schema'
 
 export default function LeadsPage() {
   const [properties, setProperties] = useState<Property[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
     try {
@@ -34,36 +36,45 @@ export default function LeadsPage() {
   const { user } = useAuth()
 
   const fetchProperties = useCallback(async () => {
-    if (!user) return
+    if (!user) {
+      setLoading(false)
+      setProperties([])
+      return
+    }
 
     setLoading(true)
-    const supabase = createClient()
+    setError(null)
 
-    // Supabase caps queries at 1,000 rows by default.
-    // Paginate through all leads so accounts with >1,000 leads see everything.
-    const PAGE_SIZE = 1000
+    const PAGE_SIZE = 100
     let allData: Property[] = []
-    let from = 0
-    let hasMore = true
+    let offset = 0
+    let total = Infinity
 
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from('properties')
-        .select(`
-          *,
-          list:lead_lists(id, name)
-        `)
-        .eq('created_by', user.id)
-        .order('follow_up_date', { ascending: true, nullsFirst: false })
-        .range(from, from + PAGE_SIZE - 1)
+    while (allData.length < total) {
+      const result = await api.getProperties({
+        view: 'mine',
+        limit: PAGE_SIZE,
+        offset,
+        sortBy: 'created_at',
+        sortOrder: 'desc',
+      })
 
-      if (error || !data) {
-        hasMore = false
-      } else {
-        allData = allData.concat(data as Property[])
-        hasMore = data.length === PAGE_SIZE
-        from += PAGE_SIZE
+      if (result.error || !result.data) {
+        setProperties([])
+        setError(result.error || 'Failed to load leads.')
+        setLoading(false)
+        return
       }
+
+      const pageData = result.data.properties || []
+      total = result.data.total
+      allData = allData.concat(pageData as Property[])
+
+      if (pageData.length === 0) {
+        break
+      }
+
+      offset += pageData.length
     }
 
     setProperties(allData)
@@ -71,7 +82,13 @@ export default function LeadsPage() {
   }, [user])
 
   useEffect(() => {
-    fetchProperties()
+    const timeoutId = window.setTimeout(() => {
+      void fetchProperties()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
   }, [fetchProperties])
 
   useEffect(() => {
@@ -135,16 +152,6 @@ export default function LeadsPage() {
     setSelectedIds(new Set())
   }
 
-  const totalByStatus = useMemo(() => {
-    return {
-      new: filteredProperties.filter((p) => p.status === 'new').length,
-      contacted: filteredProperties.filter((p) => p.status === 'contacted').length,
-      warm: filteredProperties.filter((p) => p.status === 'warm').length,
-      follow_up: filteredProperties.filter((p) => p.status === 'follow_up').length,
-      closed: filteredProperties.filter((p) => p.status === 'closed').length,
-    }
-  }, [filteredProperties])
-
   const totalCount = filteredProperties.length
 
   return (
@@ -178,6 +185,23 @@ export default function LeadsPage() {
               <Skeleton className="h-[500px] rounded-lg" />
             </div>
           ))}
+        </div>
+      ) : error ? (
+        <div className="text-center py-16">
+          <Building2 className="h-12 w-12 mx-auto text-red-500/40 mb-4" />
+          <h3 className="text-lg font-medium">Couldn&apos;t load leads</h3>
+          <p className="text-muted-foreground text-sm mt-1">
+            {error}
+          </p>
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={() => {
+              void fetchProperties()
+            }}
+          >
+            Try Again
+          </Button>
         </div>
       ) : filteredProperties.length === 0 && !filters.search && filters.priority === 'all' && filters.listId === 'all' ? (
         <div className="text-center py-16">
