@@ -3,78 +3,18 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ArrowLeft, Phone, PhoneMissed } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { toast } from 'sonner'
+import { api } from '@/lib/api/client'
 import { DealAnalysisCard } from '@/components/leads/deal-analysis'
 import { RentalComps } from '@/components/leads/rental-comps'
 import { SkipTrace } from '@/components/leads/skip-trace'
 import { PropertyNotes } from '@/components/leads/property-notes'
 import { ActivityTimeline } from '@/components/leads/activity-timeline'
-import { CompsMap } from '@/components/leads/comps-map'
 import { PhotoGallery } from '@/components/leads/photo-gallery'
-import type { Property, Contact, RentalEstimate, SoldEstimate, RentalComp, SoldComp } from '@/types/schema'
-
-// Comps Map Widget Component
-function CompsMapWidget({ property }: { property: Property }) {
-    const [compType, setCompType] = useState<'rental' | 'sold'>('rental')
-
-    const rentalComps = property.rental_data?.comparables || []
-    const soldComps = property.sold_data?.comparables || []
-    const currentComps = compType === 'rental' ? rentalComps : soldComps
-    const hasComps = currentComps.length > 0
-
-    return (
-        <Card className="shadow-sm">
-            <CardContent className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold flex items-center gap-2">
-                        Comps Map
-                    </h3>
-                    {/* Toggle */}
-                    <div className="flex rounded-lg border p-0.5 bg-zinc-100 dark:bg-zinc-800">
-                        <button
-                            onClick={() => setCompType('rental')}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${compType === 'rental'
-                                ? 'bg-white dark:bg-zinc-700 shadow-sm'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            Rental
-                        </button>
-                        <button
-                            onClick={() => setCompType('sold')}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${compType === 'sold'
-                                ? 'bg-white dark:bg-zinc-700 shadow-sm'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            Sold
-                        </button>
-                    </div>
-                </div>
-
-                {hasComps ? (
-                    <CompsMap
-                        subjectAddress={property.address}
-                        comps={currentComps as (RentalComp | SoldComp)[]}
-                        compType={compType}
-                    />
-                ) : (
-                    <div className="h-[200px] bg-zinc-100 dark:bg-zinc-800 rounded-lg flex items-center justify-center">
-                        <p className="text-sm text-muted-foreground text-center px-4">
-                            No {compType} comps available yet.<br />
-                            <span className="text-xs">Fetch comps below to see them on the map.</span>
-                        </p>
-                    </div>
-                )}
-            </CardContent>
-        </Card>
-    )
-}
+import type { Property, Contact, RentalEstimate, SoldEstimate } from '@/types/schema'
 
 export default function PropertyDetailPage() {
     const params = useParams()
@@ -89,35 +29,26 @@ export default function PropertyDetailPage() {
             const supabase = createClient()
 
             const [propRes, contactsRes] = await Promise.all([
-                supabase.from('properties').select('*, raw_realestate_data:raw_attom_data').eq('id', id).single(),
-                supabase.from('contacts').select('*').eq('property_id', id),
+                supabase.from('properties').select('*').eq('id', id).single(),
+                api.getContacts(id),
             ])
 
             if (propRes.data) {
-                setProperty(propRes.data as Property)
+                const propertyData = propRes.data as Property & { raw_attom_data?: Record<string, unknown> | null }
+                setProperty({
+                    ...propertyData,
+                    raw_realestate_data: propertyData.raw_realestate_data ?? propertyData.raw_attom_data ?? null,
+                } as Property)
             }
             if (contactsRes.data) {
                 setContacts(contactsRes.data as Contact[])
+            } else if (contactsRes.error) {
+                console.error('Failed to load contacts for property:', contactsRes.error)
             }
             setLoading(false)
         }
         fetchData()
     }, [id])
-
-    const updateStatus = async (newStatus: string) => {
-        const supabase = createClient()
-        const { error } = await supabase
-            .from('properties')
-            .update({ status: newStatus })
-            .eq('id', id)
-
-        if (error) {
-            toast.error('Failed to update status')
-        } else {
-            setProperty((prev) => prev ? { ...prev, status: newStatus as Property['status'] } : prev)
-            toast.success(`Status updated to ${newStatus}`)
-        }
-    }
 
     if (loading) {
         return (

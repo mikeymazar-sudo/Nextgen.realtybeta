@@ -18,10 +18,11 @@ import {
     GripVertical,
     Phone,
     PhoneMissed,
+    Mail,
     StickyNote,
     Calendar as CalendarIcon,
     Flag,
-    MoreHorizontal,
+    User,
 } from 'lucide-react'
 import { format, formatDistanceToNow, isPast, isToday } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
@@ -36,16 +37,38 @@ interface LeadCardProps {
     onUpdate: () => void
 }
 
-const priorityColors = {
-    high: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-    medium: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
-    low: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-}
-
 const priorityDots = {
     high: 'bg-red-500',
     medium: 'bg-yellow-500',
     low: 'bg-green-500',
+}
+
+function formatPhoneNumber(phone: string): string {
+    const digits = phone.replace(/\D/g, '')
+    if (digits.length === 10) {
+        return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+    }
+    return phone
+}
+
+function getPrimaryEmail(property: Property): string | null {
+    const rawData = ((property as Property & { raw_attom_data?: Record<string, unknown> | null }).raw_realestate_data
+        ?? (property as Property & { raw_attom_data?: Record<string, unknown> | null }).raw_attom_data) as
+        | { data?: { ownerInfo?: { email?: unknown } } }
+        | null
+
+    const rawEmail = rawData?.data?.ownerInfo?.email
+
+    if (typeof rawEmail === 'string' && rawEmail.includes('@')) {
+        return rawEmail
+    }
+
+    if (Array.isArray(rawEmail)) {
+        const firstEmail = rawEmail.find((value): value is string => typeof value === 'string' && value.includes('@'))
+        return firstEmail || null
+    }
+
+    return null
 }
 
 export function LeadCard({ property, isSelected, isSelectionMode, onSelect, onUpdate }: LeadCardProps) {
@@ -109,6 +132,8 @@ export function LeadCard({ property, isSelected, isSelectionMode, onSelect, onUp
     const followUpDate = property.follow_up_date ? new Date(property.follow_up_date) : null
     const isOverdue = followUpDate && isPast(followUpDate) && !isToday(followUpDate)
     const isDueToday = followUpDate && isToday(followUpDate)
+    const primaryPhone = property.owner_phone?.[0] || null
+    const primaryEmail = getPrimaryEmail(property)
 
     return (
         <Card
@@ -148,6 +173,29 @@ export function LeadCard({ property, isSelected, isSelectionMode, onSelect, onUp
                             {[property.city, property.state].filter(Boolean).join(', ')}
                         </p>
                     </Link>
+
+                    {(property.owner_name || primaryPhone || primaryEmail) && (
+                        <div className="mt-2 space-y-1">
+                            {property.owner_name && (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <User className="h-3 w-3 shrink-0" />
+                                    <span className="truncate">{property.owner_name}</span>
+                                </div>
+                            )}
+                            {primaryPhone && (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <Phone className="h-3 w-3 shrink-0" />
+                                    <span className="truncate">{formatPhoneNumber(primaryPhone)}</span>
+                                </div>
+                            )}
+                            {primaryEmail && (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <Mail className="h-3 w-3 shrink-0" />
+                                    <span className="truncate">{primaryEmail}</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Badges Row */}
                     <div className="flex flex-wrap items-center gap-1.5 mt-2">

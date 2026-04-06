@@ -11,6 +11,57 @@ const AddContactSchema = z.object({
     label: z.string().optional(),
 })
 
+export const GET = withAuth(async (req: NextRequest, { user }) => {
+    try {
+        const { searchParams } = new URL(req.url)
+        const propertyId = searchParams.get('propertyId')
+
+        if (!propertyId) {
+            return Errors.badRequest('Missing required query param: propertyId')
+        }
+
+        const supabase = createAdminClient()
+
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('team_id, role')
+            .eq('id', user.id)
+            .single()
+
+        let propertyQuery = supabase
+            .from('properties')
+            .select('id')
+            .eq('id', propertyId)
+
+        if (profile?.team_id && profile.role === 'admin') {
+            propertyQuery = propertyQuery.or(`created_by.eq.${user.id},team_id.eq.${profile.team_id}`)
+        } else {
+            propertyQuery = propertyQuery.eq('created_by', user.id)
+        }
+
+        const { data: property, error: propertyError } = await propertyQuery.single()
+
+        if (propertyError || !property) {
+            return Errors.notFound('Property')
+        }
+
+        const { data: contacts, error: contactsError } = await supabase
+            .from('contacts')
+            .select('*')
+            .eq('property_id', propertyId)
+
+        if (contactsError) {
+            console.error('Failed to fetch contacts:', contactsError)
+            return Errors.internal(contactsError.message)
+        }
+
+        return apiSuccess(contacts || [])
+    } catch (error) {
+        console.error('Get contacts error:', error)
+        return Errors.internal()
+    }
+})
+
 export const POST = withAuth(async (req: NextRequest) => {
     try {
         const body = await req.json()
@@ -43,7 +94,7 @@ export const POST = withAuth(async (req: NextRequest) => {
 
         if (existingContact) {
             // Update existing contact
-            let updateData: Record<string, unknown> = {}
+            const updateData: Record<string, unknown> = {}
 
             if (type === 'phone') {
                 const currentPhones = existingContact.phone_numbers || []

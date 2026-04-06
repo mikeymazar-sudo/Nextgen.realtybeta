@@ -1,7 +1,50 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { withAuth } from '@/lib/auth/middleware';
 import { Errors, apiSuccess } from '@/lib/api/response';
+
+type ImportedPropertyRow = Record<string, string | undefined>;
+type ImportedContactEntry = {
+    value: string;
+    label: string;
+    is_primary: boolean;
+};
+type ImportedContactInsert = {
+    property_id: string;
+    name: string | null;
+    phone_numbers: ImportedContactEntry[];
+    emails: ImportedContactEntry[];
+};
+type UpsertedPropertyRow = {
+    id: string;
+    address: string | null;
+    city: string | null;
+    state: string | null;
+    zip: string | null;
+};
+
+function collectUniquePhones(row: ImportedPropertyRow): string[] {
+    const rawPhones = [row.owner_phone, row.phone_1, row.phone_2, row.phone_3]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value));
+
+    const validPhones = rawPhones.filter((value) => {
+        const digits = value.replace(/\D/g, '');
+        return digits.length >= 7 && digits.length <= 15;
+    });
+
+    return [...new Set(validPhones)].slice(0, 3);
+}
+
+function collectUniqueEmails(row: ImportedPropertyRow): string[] {
+    const rawEmails = [row.owner_email, row.email_1, row.email_2, row.email_3]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value));
+
+    const validEmails = rawEmails.filter((value) => value.includes('@'));
+
+    return [...new Set(validEmails)].slice(0, 3);
+}
 
 export const POST = withAuth(async (req: NextRequest, { user }) => {
     try {
@@ -11,6 +54,8 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
         if (!properties || !Array.isArray(properties) || properties.length === 0) {
             return Errors.badRequest('No properties provided');
         }
+
+        const importedProperties = properties as ImportedPropertyRow[];
 
         const supabase = createAdminClient();
 
@@ -44,15 +89,20 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
 
         // 3. Process in batches
         let imported = 0;
-        let skipped = 0;
+        const skipped = 0;
         let errors = 0;
         const allPropertyIds: string[] = [];
 
         const batchSize = 100;
-        for (let i = 0; i < properties.length; i += batchSize) {
-            const batch = properties.slice(i, i + batchSize);
+        for (let i = 0; i < importedProperties.length; i += batchSize) {
+            const batch = importedProperties.slice(i, i + batchSize);
 
-            const rows = batch.map((p: any) => {
+            const rows = batch.map((p: ImportedPropertyRow) => {
+                const uniquePhones = collectUniquePhones(p);
+                const uniqueEmails = collectUniqueEmails(p);
+                const primaryPhone = uniquePhones[0] || null;
+                const primaryEmail = uniqueEmails[0] || null;
+
                 // Construct the raw_realestate_data JSON to match NormalizedPropertyData structure
                 // This will allow the UI to automatically render these fields
                 const rawData = {
@@ -93,8 +143,8 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                         ownerInfo: {
                             owner1FullName: p.owner_name,
                             owner2FullName: p.owner2_name,
-                            phone: p.owner_phone,
-                            email: p.owner_email,
+                            phone: primaryPhone,
+                            email: primaryEmail,
                             ownerOccupied: p.owner_occupied === 'Yes' || p.owner_occupied === 'true' || p.owner_occupied === '1',
                             absenteeOwner: p.absentee_owner === 'Yes' || p.absentee_owner === 'true' || p.absentee_owner === '1',
                             corporateOwned: p.corporate_owned === 'Yes' || p.corporate_owned === 'true' || p.corporate_owned === '1',
@@ -162,16 +212,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                     mailing_city: p.mailing_city || null,
                     mailing_state: p.mailing_state || null,
                     mailing_zip: p.mailing_zip || null,
-
-                    owner_phone: (() => {
-                        const phones = [p.owner_phone, p.phone_1, p.phone_2, p.phone_3]
-                            .filter(Boolean)
-                            .filter((v: string) => {
-                                const digits = v.replace(/\D/g, '')
-                                return digits.length >= 7 && digits.length <= 15
-                            })
-                        return phones.length > 0 ? phones : null
-                    })(),
+                    owner_phone: uniquePhones.length > 0 ? uniquePhones : null,
 
                     status: 'new',
                     created_by: user.id,
@@ -194,7 +235,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                     return apiSuccess({
                         imported,
                         skipped,
-                        errors: errors + (properties.length - (i + batchSize)), // All remaining rows are effectively errors
+                        errors: errors + (importedProperties.length - (i + batchSize)), // All remaining rows are effectively errors
                         listId,
                         errorDetails: error.message
                     });
@@ -210,7 +251,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                         // Build address→id map to correctly match CSV rows to property IDs
                         // regardless of the order Postgres returns upserted rows.
                         const propertyIdByAddress = new Map<string, string>();
-                        for (const prop of data as any[]) {
+                        for (const prop of data as UpsertedPropertyRow[]) {
                             const key = [
                                 (prop.address || '').toLowerCase().trim(),
                                 (prop.city || '').toLowerCase().trim(),
@@ -220,7 +261,7 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                             propertyIdByAddress.set(key, prop.id);
                         }
 
-                        const contactsToInsert: any[] = [];
+                        const contactsToInsert: ImportedContactInsert[] = [];
                         for (const p of batch) {
                             const addrKey = [
                                 (p.address || '').toLowerCase().trim(),
@@ -231,35 +272,20 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                             const propertyId = propertyIdByAddress.get(addrKey);
                             if (!propertyId) continue;
 
-                            // Collect phones: owner_phone + phone_1/2/3, deduplicated, max 3
-                            // Validate: must have 7-15 digits to be a real phone number
-                            const rawPhones = [p.owner_phone, p.phone_1, p.phone_2, p.phone_3]
-                                .filter(Boolean) as string[];
-                            const validPhones = rawPhones.filter((v) => {
-                                const digits = v.replace(/\D/g, '')
-                                return digits.length >= 7 && digits.length <= 15
-                            })
-                            const uniquePhones = [...new Set(validPhones)].slice(0, 3);
-
-                            // Collect emails: owner_email + email_1/2/3, deduplicated, max 3
-                            // Validate: must contain @ to be a real email
-                            const rawEmails = [p.owner_email, p.email_1, p.email_2, p.email_3]
-                                .filter(Boolean) as string[];
-                            const validEmails = rawEmails.filter((v) => v.includes('@'))
-                            const uniqueEmails = [...new Set(validEmails)].slice(0, 3);
+                            const uniquePhones = collectUniquePhones(p);
+                            const uniqueEmails = collectUniqueEmails(p);
 
                             if (uniquePhones.length === 0 && uniqueEmails.length === 0) continue;
 
-                            // Serialize as JSON strings to match the text[] column type
                             contactsToInsert.push({
                                 property_id: propertyId,
                                 name: p.owner_name || null,
-                                phone_numbers: uniquePhones.map((v, idx) => JSON.stringify({
+                                phone_numbers: uniquePhones.map((v, idx) => ({
                                     value: v,
                                     label: 'mobile',
                                     is_primary: idx === 0,
                                 })),
-                                emails: uniqueEmails.map((v, idx) => JSON.stringify({
+                                emails: uniqueEmails.map((v, idx) => ({
                                     value: v,
                                     label: 'personal',
                                     is_primary: idx === 0,
@@ -268,13 +294,13 @@ export const POST = withAuth(async (req: NextRequest, { user }) => {
                         }
                         if (contactsToInsert.length > 0) {
                             // Check which properties already have a contact, then only insert new ones
-                            const propIds = contactsToInsert.map((c: any) => c.property_id)
+                            const propIds = contactsToInsert.map((c) => c.property_id)
                             const { data: existingContacts } = await supabase
                                 .from('contacts')
                                 .select('property_id')
                                 .in('property_id', propIds)
-                            const existingPropIds = new Set((existingContacts || []).map((e: any) => e.property_id))
-                            const newContacts = contactsToInsert.filter((c: any) => !existingPropIds.has(c.property_id))
+                            const existingPropIds = new Set((existingContacts || []).map((e) => e.property_id))
+                            const newContacts = contactsToInsert.filter((c) => !existingPropIds.has(c.property_id))
                             if (newContacts.length > 0) {
                                 const { error: contactError } = await supabase.from('contacts').insert(newContacts)
                                 if (contactError) {

@@ -212,6 +212,10 @@ class ApiClient {
     })
   }
 
+  async getContacts(propertyId: string) {
+    return this.request<Contact[]>(`/api/contacts?propertyId=${encodeURIComponent(propertyId)}`)
+  }
+
   async addContact(propertyId: string, type: 'phone' | 'email', value: string, label: string) {
     return this.request<Contact>('/api/contacts', {
       method: 'POST',
