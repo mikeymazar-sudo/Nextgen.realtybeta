@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { RestClient } from '@signalwire/compatibility-api'
+import { RestClient } from '@/lib/signalwire/compatibility-api'
+
+export const runtime = 'nodejs'
 
 export async function POST(req: NextRequest) {
   try {

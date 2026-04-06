@@ -1,4 +1,4 @@
-import { RestClient } from '@signalwire/compatibility-api'
+import { RestClient } from '@/lib/signalwire/compatibility-api'
 import { createAdminClient } from '@/lib/supabase/server'
 import { normalizePhoneNumber } from '@/lib/utils'
 import { getSignalWireEnv } from '@/lib/signalwire/config'
@@ -35,6 +35,17 @@ export interface UserPhoneNumberRecord {
 interface SignalWireSubscriberInfo {
   id: string
   fabric_addresses: SignalWireAddress[]
+}
+
+interface SignalWireSubscriberSession extends SignalWireSubscriberInfo {
+  token: string
+}
+
+interface SignalWireProjectPhoneNumber {
+  id: string
+  name?: string | null
+  number: string
+  capabilities?: string[]
 }
 
 interface EnsureUserPhoneNumberOptions {
@@ -123,6 +134,16 @@ function getBasicAuthHeader(projectId: string, apiToken: string) {
   return `Basic ${Buffer.from(`${projectId}:${apiToken}`).toString('base64')}`
 }
 
+function getConfiguredExistingPhoneNumber() {
+  const { phoneNumber, subscriberReference } = getSignalWireEnv()
+
+  if (subscriberReference) {
+    return null
+  }
+
+  return phoneNumber ? normalizePhoneNumber(phoneNumber) : null
+}
+
 async function fetchUserPhoneNumber(userId: string) {
   const supabase = createAdminClient()
   const { data, error } = await supabase
@@ -181,7 +202,9 @@ async function waitForProvisionedPhoneNumber(userId: string) {
   throw new Error('Timed out waiting for dedicated phone number provisioning.')
 }
 
-async function getSubscriberInfoByReference(reference: string) {
+async function createSubscriberSessionByReference(
+  reference: string
+): Promise<SignalWireSubscriberSession> {
   const { apiToken, projectId, spaceHost, fabricHost } = getSignalWireAdminConfig()
 
   const tokenResponse = await fetch(
@@ -228,8 +251,96 @@ async function getSubscriberInfoByReference(reference: string) {
 
   return {
     id: subscriber.id,
+    token: tokenPayload.token,
     fabric_addresses: subscriber.fabric_addresses || [],
   }
+}
+
+export async function resolveSignalWireOutboundAddressIdForToken(
+  token: string,
+  phoneNumber: string,
+  preferredAddresses: SignalWireAddress[] = []
+) {
+  const fromPreferred = findSignalWireOutboundAddressId(preferredAddresses, phoneNumber)
+  if (fromPreferred) {
+    return fromPreferred
+  }
+
+  const { fabricHost } = getSignalWireAdminConfig()
+  const addressesResponse = await fetch(
+    `https://${fabricHost}/api/fabric/addresses?page_size=100`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!addressesResponse.ok) {
+    const text = await addressesResponse.text()
+    throw new Error(
+      `SignalWire addresses lookup error (${addressesResponse.status}): ${text}`
+    )
+  }
+
+  const addressesPayload = (await addressesResponse.json()) as {
+    data?: SignalWireAddress[]
+  }
+
+  return findSignalWireOutboundAddressId(addressesPayload.data || [], phoneNumber)
+}
+
+async function resolveOutboundAddressForReference(reference: string, phoneNumber: string) {
+  const subscriber = await createSubscriberSessionByReference(reference)
+  const addressId = await resolveSignalWireOutboundAddressIdForToken(
+    subscriber.token,
+    phoneNumber,
+    subscriber.fabric_addresses
+  )
+
+  return {
+    subscriberId: subscriber.id,
+    addressId,
+  }
+}
+
+async function fetchProjectPhoneNumbers() {
+  const { apiToken, projectId, spaceHost } = getSignalWireAdminConfig()
+  const response = await fetch(
+    `https://${spaceHost}/api/relay/rest/phone_numbers?page_size=100`,
+    {
+      headers: {
+        Authorization: getBasicAuthHeader(projectId, apiToken),
+      },
+    }
+  )
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(
+      `SignalWire phone number lookup error (${response.status}): ${text}`
+    )
+  }
+
+  const payload = (await response.json()) as {
+    data?: SignalWireProjectPhoneNumber[]
+  }
+
+  return payload.data || []
+}
+
+async function findProjectPhoneNumber(phoneNumber: string) {
+  const normalizedPhone = normalizePhoneNumber(phoneNumber)
+  if (!normalizedPhone) {
+    return null
+  }
+
+  const numbers = await fetchProjectPhoneNumbers()
+  return (
+    numbers.find(
+      (entry) => normalizePhoneNumber(entry.number) === normalizedPhone
+    ) || null
+  )
 }
 
 async function syncVoiceRouting(record: UserPhoneNumberRecord) {
@@ -237,18 +348,19 @@ async function syncVoiceRouting(record: UserPhoneNumberRecord) {
     return record
   }
 
-  const subscriber = await getSubscriberInfoByReference(record.user_id)
-  const resolvedAddressId =
-    findSignalWireOutboundAddressId(subscriber.fabric_addresses, record.phone_number)
+  const resolved = await resolveOutboundAddressForReference(
+    record.user_id,
+    record.phone_number
+  )
 
-  const nextVoiceStatus: VoiceRoutingStatus = resolvedAddressId ? 'active' : 'pending'
-  const nextVoiceError = resolvedAddressId
+  const nextVoiceStatus: VoiceRoutingStatus = resolved.addressId ? 'active' : 'pending'
+  const nextVoiceError = resolved.addressId
     ? null
-    : 'Dedicated phone number exists, but no SignalWire Fabric address is attached to this user yet.'
+    : 'Dedicated phone number exists, but no SignalWire Fabric audio address could be resolved for this user yet.'
 
   if (
-    record.signalwire_address_id === resolvedAddressId &&
-    record.signalwire_subscriber_id === subscriber.id &&
+    record.signalwire_address_id === resolved.addressId &&
+    record.signalwire_subscriber_id === resolved.subscriberId &&
     record.voice_routing_status === nextVoiceStatus &&
     record.voice_routing_error === nextVoiceError
   ) {
@@ -256,8 +368,8 @@ async function syncVoiceRouting(record: UserPhoneNumberRecord) {
   }
 
   return updateUserPhoneNumber(record.id, {
-    signalwire_subscriber_id: subscriber.id,
-    signalwire_address_id: resolvedAddressId,
+    signalwire_subscriber_id: resolved.subscriberId,
+    signalwire_address_id: resolved.addressId,
     voice_routing_status: nextVoiceStatus,
     voice_routing_error: nextVoiceError,
     last_verified_at: new Date().toISOString(),
@@ -351,6 +463,8 @@ async function provisionDedicatedPhoneNumber({
     friendlyName,
     smsUrl: `${baseUrl}/api/sms/webhook`,
     smsMethod: 'POST',
+    voiceUrl: `${baseUrl}/api/voice/webhook`,
+    voiceMethod: 'POST',
   })
 
   const row = await fetchUserPhoneNumber(userId)
@@ -459,6 +573,89 @@ async function claimProvisioningSlot(userId: string) {
   }
 
   return { record: null, claimed: false }
+}
+
+export async function canConnectExistingConfiguredPhoneNumber(userId: string) {
+  const configuredPhoneNumber = getConfiguredExistingPhoneNumber()
+  if (!configuredPhoneNumber) {
+    return false
+  }
+
+  const currentAssignment = await fetchUserPhoneNumber(userId)
+  if (currentAssignment?.phone_number) {
+    return false
+  }
+
+  const existingOwner = await getUserPhoneNumberByNumber(configuredPhoneNumber)
+  return !existingOwner || existingOwner.user_id === userId
+}
+
+export async function connectExistingConfiguredPhoneNumberToUser(
+  options: EnsureUserPhoneNumberOptions
+) {
+  const configuredPhoneNumber = getConfiguredExistingPhoneNumber()
+  if (!configuredPhoneNumber) {
+    throw new Error(
+      'No existing SignalWire phone number is configured for manual connection.'
+    )
+  }
+
+  const existingOwner = await getUserPhoneNumberByNumber(configuredPhoneNumber)
+  if (existingOwner && existingOwner.user_id !== options.userId) {
+    throw new Error('That SignalWire phone number is already assigned to another user.')
+  }
+
+  const projectPhoneNumber = await findProjectPhoneNumber(configuredPhoneNumber)
+  if (!projectPhoneNumber) {
+    throw new Error(
+      'The configured SignalWire phone number was not found in this SignalWire project.'
+    )
+  }
+
+  if (!projectPhoneNumber.capabilities?.includes('voice')) {
+    throw new Error('The configured SignalWire phone number does not support voice.')
+  }
+
+  const { record, claimed } = await claimProvisioningSlot(options.userId)
+
+  if (
+    record?.phone_number &&
+    normalizePhoneNumber(record.phone_number) !== configuredPhoneNumber &&
+    record.provisioning_status === 'active'
+  ) {
+    throw new Error('This account already has a different dedicated phone number.')
+  }
+
+  if (!claimed && record?.phone_number === configuredPhoneNumber) {
+    return syncVoiceRoutingSafely(record)
+  }
+
+  const activeRecord = record || (await fetchUserPhoneNumber(options.userId))
+  if (!activeRecord) {
+    throw new Error('Unable to claim a phone number slot for this user.')
+  }
+
+  const now = new Date().toISOString()
+  const friendlyName =
+    cleanOptionalEnv(projectPhoneNumber.name) ||
+    buildFriendlyName(options.userId, options.fullName, options.userEmail)
+
+  const updated = await updateUserPhoneNumber(activeRecord.id, {
+    phone_number: configuredPhoneNumber,
+    provider: 'signalwire',
+    signalwire_incoming_phone_number_sid:
+      activeRecord.signalwire_incoming_phone_number_sid,
+    provisioning_status: 'active',
+    assignment_source: 'manual',
+    friendly_name: friendlyName,
+    provisioning_error: null,
+    voice_routing_error: null,
+    assigned_at: activeRecord.assigned_at || now,
+    last_provisioning_attempt_at: now,
+    last_verified_at: now,
+  })
+
+  return syncVoiceRoutingSafely(updated)
 }
 
 export async function getUserPhoneNumberForUser(userId: string) {

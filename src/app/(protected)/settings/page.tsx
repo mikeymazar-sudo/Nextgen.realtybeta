@@ -24,6 +24,8 @@ export default function SettingsPage() {
   const [phoneNumber, setPhoneNumber] = useState<UserPhoneNumber | null>(null)
   const [loadingPhoneNumber, setLoadingPhoneNumber] = useState(true)
   const [retryingPhoneNumber, setRetryingPhoneNumber] = useState(false)
+  const [canConnectExistingNumber, setCanConnectExistingNumber] = useState(false)
+  const [connectingExistingNumber, setConnectingExistingNumber] = useState(false)
 
   useEffect(() => {
     if (!profile?.id) return
@@ -37,6 +39,7 @@ export default function SettingsPage() {
 
         if (!cancelled) {
           setPhoneNumber((payload?.data?.assignment as UserPhoneNumber | null) || null)
+          setCanConnectExistingNumber(Boolean(payload?.data?.canConnectExistingNumber))
         }
       } catch (error) {
         console.error('Failed to load dedicated phone number:', error)
@@ -83,11 +86,42 @@ export default function SettingsPage() {
       }
 
       setPhoneNumber((payload?.data?.assignment as UserPhoneNumber | null) || null)
+      setCanConnectExistingNumber(false)
       toast.success('Dedicated phone number is ready')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Provisioning failed')
     } finally {
       setRetryingPhoneNumber(false)
+    }
+  }
+
+  const connectExistingPhoneNumber = async () => {
+    try {
+      setConnectingExistingNumber(true)
+      const response = await fetch('/api/phone-number', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'connect-existing' }),
+      })
+      const payload = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Could not connect the existing number')
+      }
+
+      setPhoneNumber((payload?.data?.assignment as UserPhoneNumber | null) || null)
+      setCanConnectExistingNumber(false)
+      toast.success('Existing SignalWire number connected')
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Could not connect the existing number'
+      )
+    } finally {
+      setConnectingExistingNumber(false)
     }
   }
 
@@ -215,6 +249,19 @@ export default function SettingsPage() {
                   {retryingPhoneNumber && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Retry Number Provisioning
                 </Button>
+
+                {profile?.role === 'admin' && canConnectExistingNumber ? (
+                  <Button
+                    variant="secondary"
+                    onClick={connectExistingPhoneNumber}
+                    disabled={connectingExistingNumber}
+                  >
+                    {connectingExistingNumber ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : null}
+                    Connect Existing Number
+                  </Button>
+                ) : null}
               </div>
             </CardContent>
           </Card>

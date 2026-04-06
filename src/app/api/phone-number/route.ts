@@ -3,6 +3,8 @@ import { withAuth } from '@/lib/auth/middleware'
 import { apiError, apiSuccess } from '@/lib/api/response'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
+  canConnectExistingConfiguredPhoneNumber,
+  connectExistingConfiguredPhoneNumberToUser,
   ensureUserPhoneNumberForUser,
   getUserPhoneNumberForUser,
 } from '@/lib/signalwire/user-phone-numbers'
@@ -25,7 +27,11 @@ async function getUserFullName(userId: string) {
 export const GET = withAuth(async (_req: NextRequest, { user }) => {
   try {
     const assignment = await getUserPhoneNumberForUser(user.id)
-    return apiSuccess({ assignment })
+    const canConnectExistingNumber =
+      !assignment?.phone_number &&
+      (await canConnectExistingConfiguredPhoneNumber(user.id))
+
+    return apiSuccess({ assignment, canConnectExistingNumber })
   } catch (error) {
     console.error('Phone number lookup error:', error)
     return apiError(
@@ -39,14 +45,26 @@ export const GET = withAuth(async (_req: NextRequest, { user }) => {
 export const POST = withAuth(async (req: NextRequest, { user }) => {
   try {
     const fullName = await getUserFullName(user.id)
-    const assignment = await ensureUserPhoneNumberForUser({
-      userId: user.id,
-      userEmail: user.email,
-      fullName,
-      request: req,
-    })
+    const payload = (await req.json().catch(() => null)) as
+      | { action?: string }
+      | null
 
-    return apiSuccess({ assignment })
+    const assignment =
+      payload?.action === 'connect-existing'
+        ? await connectExistingConfiguredPhoneNumberToUser({
+            userId: user.id,
+            userEmail: user.email,
+            fullName,
+            request: req,
+          })
+        : await ensureUserPhoneNumberForUser({
+            userId: user.id,
+            userEmail: user.email,
+            fullName,
+            request: req,
+          })
+
+    return apiSuccess({ assignment, canConnectExistingNumber: false })
   } catch (error) {
     console.error('Phone number provisioning error:', error)
     return apiError(

@@ -1,4 +1,4 @@
-import { RestClient } from '@signalwire/compatibility-api'
+import { RestClient } from '@/lib/signalwire/compatibility-api'
 import { createAdminClient } from '@/lib/supabase/server'
 import { normalizePhoneNumber } from '@/lib/utils'
 import {

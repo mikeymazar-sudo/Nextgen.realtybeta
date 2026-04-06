@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { RestClient } from '@signalwire/compatibility-api'
+import { RestClient } from '@/lib/signalwire/compatibility-api'
 import { storeIncomingMessage } from '@/lib/twilio/sms'
+
+export const runtime = 'nodejs'
 
 const signingKey = process.env.SIGNALWIRE_SIGNING_KEY
 

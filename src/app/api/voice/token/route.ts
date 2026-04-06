@@ -6,11 +6,10 @@ import {
   findSignalWireOutboundAddressId,
   type SignalWireAddress,
 } from '@/lib/signalwire/shared'
-import { createAdminClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
 
-export const GET = withAuth(async (req: NextRequest, { user }) => {
+export const GET = withAuth(async (_req: NextRequest, { user }) => {
   try {
     const {
       spaceHost,
@@ -91,10 +90,22 @@ export const GET = withAuth(async (req: NextRequest, { user }) => {
         (await subscriberInfoResponse.json()) as {
           fabric_addresses?: SignalWireAddress[]
         }
-      const sharedOutboundAddressId = findSignalWireOutboundAddressId(
+      let sharedOutboundAddressId = findSignalWireOutboundAddressId(
         subscriberInfo.fabric_addresses || [],
         phoneNumber
       )
+
+      if (!sharedOutboundAddressId) {
+        const { resolveSignalWireOutboundAddressIdForToken } = await import(
+          '@/lib/signalwire/user-phone-numbers'
+        )
+        sharedOutboundAddressId =
+          await resolveSignalWireOutboundAddressIdForToken(
+            data.token,
+            phoneNumber,
+            subscriberInfo.fabric_addresses || []
+          )
+      }
 
       if (!sharedOutboundAddressId) {
         return apiError(
@@ -113,26 +124,14 @@ export const GET = withAuth(async (req: NextRequest, { user }) => {
       })
     }
 
-    const { ensureUserPhoneNumberForUser } = await import(
+    const { getUserPhoneNumberForUser } = await import(
       '@/lib/signalwire/user-phone-numbers'
     )
-    const supabase = createAdminClient()
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('full_name')
-      .eq('id', user.id)
-      .maybeSingle()
+    const assignment = await getUserPhoneNumberForUser(user.id)
 
-    const assignment = await ensureUserPhoneNumberForUser({
-      userId: user.id,
-      userEmail: user.email,
-      fullName: profile?.full_name || null,
-      request: req,
-    })
-
-    if (!assignment.phone_number) {
+    if (!assignment?.phone_number) {
       return apiError(
-        'Your dedicated phone number has not finished provisioning yet.',
+        'No dedicated phone number is assigned to this account yet. Open Settings to connect an existing number or provision a new one.',
         'VOICE_NUMBER_NOT_READY',
         503
       )
