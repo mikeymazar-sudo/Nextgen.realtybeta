@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
     DndContext,
     DragOverlay,
@@ -18,13 +18,17 @@ import { LeadCard } from './lead-card'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import type { Property } from '@/types/schema'
+import type { ColumnState } from '@/hooks/use-kanban-data'
 
 interface KanbanBoardProps {
-    leads: Property[]
+    columns: Record<string, ColumnState>
+    onLoadMore: (columnId: string) => void
+    optimisticMove: (leadId: string, fromCol: string, toCol: string) => void
+    revertMove: (leadId: string, toCol: string, fromCol: string) => void
+    refreshAll: () => void
     selectedIds: Set<string>
     isSelectionMode: boolean
     onSelect: (id: string, selected: boolean) => void
-    onUpdate: () => void
 }
 
 const COLUMNS = [
@@ -38,7 +42,16 @@ const COLUMNS = [
 
 type ColumnId = typeof COLUMNS[number]['id']
 
-export function KanbanBoard({ leads, selectedIds, isSelectionMode, onSelect, onUpdate }: KanbanBoardProps) {
+export function KanbanBoard({
+    columns,
+    onLoadMore,
+    optimisticMove,
+    revertMove,
+    refreshAll,
+    selectedIds,
+    isSelectionMode,
+    onSelect,
+}: KanbanBoardProps) {
     const [activeId, setActiveId] = useState<string | null>(null)
 
     const sensors = useSensors(
@@ -53,20 +66,31 @@ export function KanbanBoard({ leads, selectedIds, isSelectionMode, onSelect, onU
         })
     )
 
-    const getLeadsByStatus = (status: ColumnId): Property[] => {
-        return leads.filter((lead) => {
-            // Leads with a follow_up_date should appear in the Reach Out column
-            if (lead.follow_up_date) {
-                return status === 'follow_up'
+    // Flat lookup map for finding leads across all columns
+    const allLeadsMap = useMemo(() => {
+        const map = new Map<string, { lead: Property; columnId: string }>()
+        for (const col of COLUMNS) {
+            const colData = columns[col.id]
+            if (colData) {
+                for (const lead of colData.leads) {
+                    map.set(lead.id, { lead, columnId: col.id })
+                }
             }
-            // Otherwise, filter by actual status
-            return lead.status === status
-        })
-    }
+        }
+        return map
+    }, [columns])
 
     const handleDragStart = (event: DragStartEvent) => {
         setActiveId(event.active.id as string)
     }
+
+    const findLeadColumn = useCallback(
+        (leadId: string): ColumnId | null => {
+            const entry = allLeadsMap.get(leadId)
+            return entry ? (entry.columnId as ColumnId) : null
+        },
+        [allLeadsMap]
+    )
 
     const handleDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event
@@ -75,45 +99,54 @@ export function KanbanBoard({ leads, selectedIds, isSelectionMode, onSelect, onU
         if (!over) return
 
         const leadId = active.id as string
-        const lead = leads.find((l) => l.id === leadId)
-        if (!lead) return
+        const sourceColumn = findLeadColumn(leadId)
+        if (!sourceColumn) return
 
         // Determine the target column
         let targetStatus: ColumnId | null = null
 
-        // Check if dropped on a column
         if (COLUMNS.some((col) => col.id === over.id)) {
             targetStatus = over.id as ColumnId
         } else {
             // Dropped on another card - find which column that card is in
-            const targetLead = leads.find((l) => l.id === over.id)
-            if (targetLead) {
-                targetStatus = targetLead.status as ColumnId
+            const targetEntry = allLeadsMap.get(over.id as string)
+            if (targetEntry) {
+                targetStatus = targetEntry.columnId as ColumnId
             }
         }
 
-        if (!targetStatus || targetStatus === lead.status) return
+        if (!targetStatus || targetStatus === sourceColumn) return
 
-        // Update the lead status
+        // Optimistic update
+        optimisticMove(leadId, sourceColumn, targetStatus)
+
+        // Persist to Supabase
         const supabase = createClient()
+        const updateData: Record<string, unknown> = {
+            status: targetStatus,
+            status_changed_at: new Date().toISOString(),
+        }
+
+        // Clear follow_up_date when dragging out of follow_up column
+        if (sourceColumn === 'follow_up' && targetStatus !== 'follow_up') {
+            updateData.follow_up_date = null
+        }
+
         const { error } = await supabase
             .from('properties')
-            .update({
-                status: targetStatus,
-                status_changed_at: new Date().toISOString(),
-            })
+            .update(updateData)
             .eq('id', leadId)
 
         if (error) {
             toast.error('Failed to update status')
+            revertMove(leadId, targetStatus, sourceColumn)
         } else {
             const columnName = COLUMNS.find((c) => c.id === targetStatus)?.title || targetStatus
             toast.success(`Moved to ${columnName}`)
-            onUpdate()
         }
     }
 
-    const activeLead = activeId ? leads.find((l) => l.id === activeId) : null
+    const activeLead = activeId ? allLeadsMap.get(activeId)?.lead : null
 
     return (
         <DndContext
@@ -123,19 +156,31 @@ export function KanbanBoard({ leads, selectedIds, isSelectionMode, onSelect, onU
             onDragEnd={handleDragEnd}
         >
             <div className="flex gap-4 overflow-x-auto pb-4">
-                {COLUMNS.map((column) => (
-                    <KanbanColumn
-                        key={column.id}
-                        id={column.id}
-                        title={column.title}
-                        color={column.color}
-                        leads={getLeadsByStatus(column.id)}
-                        selectedIds={selectedIds}
-                        isSelectionMode={isSelectionMode}
-                        onSelect={onSelect}
-                        onUpdate={onUpdate}
-                    />
-                ))}
+                {COLUMNS.map((column) => {
+                    const colData = columns[column.id] || {
+                        leads: [],
+                        total: 0,
+                        hasMore: false,
+                        isLoadingMore: false,
+                    }
+                    return (
+                        <KanbanColumn
+                            key={column.id}
+                            id={column.id}
+                            title={column.title}
+                            color={column.color}
+                            leads={colData.leads}
+                            total={colData.total}
+                            hasMore={colData.hasMore}
+                            isLoadingMore={colData.isLoadingMore}
+                            onLoadMore={() => onLoadMore(column.id)}
+                            selectedIds={selectedIds}
+                            isSelectionMode={isSelectionMode}
+                            onSelect={onSelect}
+                            onUpdate={refreshAll}
+                        />
+                    )
+                })}
             </div>
 
             {/* Drag overlay for visual feedback */}
