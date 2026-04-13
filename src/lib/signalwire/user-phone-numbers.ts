@@ -301,8 +301,9 @@ async function findPhoneRouteForNumber(phoneNumber: string) {
   const { apiToken, projectId, spaceHost } = getSignalWireAdminConfig()
   const normalizedPhone = normalizePhoneNumber(phoneNumber)
 
+  // Use the relay/rest phone_numbers endpoint — /api/fabric/phone_routes does not exist
   const response = await fetch(
-    `https://${spaceHost}/api/fabric/phone_routes?page_size=100`,
+    `https://${spaceHost}/api/relay/rest/phone_numbers?filter_number=${encodeURIComponent(normalizedPhone || phoneNumber)}&page_size=5`,
     {
       headers: {
         Authorization: getBasicAuthHeader(projectId, apiToken),
@@ -313,51 +314,19 @@ async function findPhoneRouteForNumber(phoneNumber: string) {
   if (!response.ok) {
     const text = await response.text()
     throw new Error(
-      `SignalWire phone routes lookup failed (${response.status}): ${text}`
+      `SignalWire phone number lookup failed (${response.status}): ${text}`
     )
   }
 
   const payload = (await response.json()) as {
-    data?: SignalWirePhoneRoute[]
+    data?: Array<{ id: string; number: string; name?: string | null }>
   }
 
-  const routes = payload.data || []
-  return routes.find((route) => {
-    const routeNumber =
-      normalizePhoneNumber(route.phone_number || '') ||
-      normalizePhoneNumber(route.number || '') ||
-      normalizePhoneNumber(route.name || '')
-    return routeNumber === normalizedPhone
-  }) || null
-}
+  const numbers = payload.data || []
+  const match = numbers.find((n) => normalizePhoneNumber(n.number) === normalizedPhone)
+  if (!match) return null
 
-async function createPhoneRouteForNumber(phoneNumber: string) {
-  const { apiToken, projectId, spaceHost } = getSignalWireAdminConfig()
-  const normalizedPhone = normalizePhoneNumber(phoneNumber) || phoneNumber
-
-  const response = await fetch(
-    `https://${spaceHost}/api/fabric/phone_routes`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: getBasicAuthHeader(projectId, apiToken),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: normalizedPhone,
-        number: normalizedPhone,
-      }),
-    }
-  )
-
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(
-      `SignalWire phone route creation failed (${response.status}): ${text}`
-    )
-  }
-
-  return (await response.json()) as SignalWirePhoneRoute
+  return { id: match.id, number: match.number, name: match.name } as SignalWirePhoneRoute
 }
 
 async function assignPhoneRouteToSubscriber(
@@ -401,19 +370,15 @@ async function resolveOutboundAddressForReference(reference: string, phoneNumber
     phoneNumber
   )
 
-  // If no address exists, assign the phone route to this subscriber
+  // If no address exists, find the phone number in SignalWire and assign it to this subscriber
   if (!addressId) {
     console.log('[SignalWire] No address on subscriber, attempting phone route assignment for', phoneNumber)
     try {
-      let phoneRoute = await findPhoneRouteForNumber(phoneNumber)
+      const phoneRoute = await findPhoneRouteForNumber(phoneNumber)
       if (!phoneRoute) {
-        console.log('[SignalWire] No phone route found, creating one for', phoneNumber)
-        phoneRoute = await createPhoneRouteForNumber(phoneNumber)
-        console.log('[SignalWire] Created phone route:', JSON.stringify(phoneRoute))
+        console.error('[SignalWire] Phone number not found in SignalWire project:', phoneNumber)
       } else {
         console.log('[SignalWire] Found phone route:', JSON.stringify(phoneRoute))
-      }
-      if (phoneRoute?.id) {
         const assigned = await assignPhoneRouteToSubscriber(
           subscriber.id,
           phoneRoute.id
