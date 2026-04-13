@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import type { User, Session } from '@supabase/supabase-js'
+import type { User, Session, AuthChangeEvent } from '@supabase/supabase-js'
 import type { UserProfile } from '@/types/schema'
 
 interface AuthContextType {
@@ -149,7 +149,7 @@ export function AuthProvider({ children, initialUser = null }: AuthProviderProps
     void syncAuth()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, newSession) => {
+      async (event: AuthChangeEvent, newSession: Session | null) => {
         if (!mounted || event === 'INITIAL_SESSION') return
 
         setSession(newSession)
