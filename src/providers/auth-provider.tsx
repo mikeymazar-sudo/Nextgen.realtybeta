@@ -117,9 +117,20 @@ export function AuthProvider({ children, initialUser = null }: AuthProviderProps
       async (event: AuthChangeEvent, newSession: Session | null) => {
         if (!mounted) return
 
-        // Only clear state on an explicit sign-out — not on transient null sessions
-        // during token rotation, which would wipe the UI mid-refresh.
+        // Only clear state on a confirmed sign-out. Middleware token rotation can
+        // cause the browser client to fire SIGNED_OUT when the in-memory token
+        // becomes stale — re-read cookies first to rule out a false positive.
         if (event === 'SIGNED_OUT') {
+          const { data: { session: recheckSession } } = await supabase.auth.getSession()
+          if (recheckSession) {
+            // False positive — server rotated our token but we're still authenticated
+            setSession(recheckSession)
+            setUser(recheckSession.user)
+            setLoading(false)
+            void fetchProfile(recheckSession.user.id, { force: true })
+            return
+          }
+          // Confirmed actual sign-out
           setSession(null)
           setUser(null)
           setProfile(null)
