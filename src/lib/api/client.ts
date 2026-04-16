@@ -103,6 +103,33 @@ class ApiClient {
     )
   }
 
+  async getKanbanData(params: {
+    view?: 'mine' | 'team'
+    limit?: number
+    offsets?: Record<string, number>
+    column?: string
+    search?: string
+    priority?: string
+    listId?: string
+    followUpFrom?: string
+    followUpTo?: string
+    sortBy?: string
+    sortOrder?: string
+  }) {
+    const searchParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null) return
+      if (key === 'offsets') {
+        searchParams.set(key, JSON.stringify(value))
+      } else {
+        searchParams.set(key, String(value))
+      }
+    })
+    return this.request<{
+      columns: Record<string, { leads: Property[]; total: number }>
+    }>(`/api/properties/kanban?${searchParams.toString()}`)
+  }
+
   // Analysis
   async analyzeProperty(propertyId: string, overrides?: Partial<AnalysisSettings>, force?: boolean) {
     return this.request<DealAnalysis>('/api/ai/analyze', {
