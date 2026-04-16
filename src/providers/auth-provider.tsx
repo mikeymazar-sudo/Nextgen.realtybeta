@@ -93,12 +93,15 @@ export function AuthProvider({ children, initialUser = null }: AuthProviderProps
 
         if (!mounted) return
 
-        setSession(currentSession)
-        setUser(currentSession?.user ?? null)
-
-        if (currentSession?.user) {
+        if (currentSession) {
+          setSession(currentSession)
+          setUser(currentSession.user)
           await fetchProfile(currentSession.user.id)
         }
+        // If getSession() returns null, do NOT clear initialUser.
+        // The middleware may have rotated the token in the same request, leaving
+        // the client unable to read the new cookie momentarily. The actual
+        // sign-out path goes through onAuthStateChange SIGNED_OUT.
       } catch (err) {
         console.error('Init auth error:', err)
       } finally {
@@ -130,9 +133,10 @@ export function AuthProvider({ children, initialUser = null }: AuthProviderProps
         if (newSession) {
           setSession(newSession)
           setUser(newSession.user)
-          setLoading(false)
           void fetchProfile(newSession.user.id, { force: event === 'USER_UPDATED' })
         }
+
+        setLoading(false)
       }
     )
 
