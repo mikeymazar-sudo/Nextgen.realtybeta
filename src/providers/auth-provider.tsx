@@ -114,20 +114,25 @@ export function AuthProvider({ children, initialUser = null }: AuthProviderProps
       async (event: AuthChangeEvent, newSession: Session | null) => {
         if (!mounted) return
 
-        setSession(newSession)
-        setUser(newSession?.user ?? null)
-        setLoading(false)
-
-        if (newSession?.user) {
-          void fetchProfile(newSession.user.id, { force: event === 'USER_UPDATED' })
-        } else {
+        // Only clear state on an explicit sign-out — not on transient null sessions
+        // during token rotation, which would wipe the UI mid-refresh.
+        if (event === 'SIGNED_OUT') {
+          setSession(null)
+          setUser(null)
+          setProfile(null)
+          setLoading(false)
           fetchedProfileUserIdRef.current = null
           inFlightProfileUserIdRef.current = null
           inFlightProfileRequestRef.current = null
-          setProfile(null)
+          return
         }
 
-        if (event === 'SIGNED_OUT') setProfile(null)
+        if (newSession) {
+          setSession(newSession)
+          setUser(newSession.user)
+          setLoading(false)
+          void fetchProfile(newSession.user.id, { force: event === 'USER_UPDATED' })
+        }
       }
     )
 
